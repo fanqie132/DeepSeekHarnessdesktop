@@ -18,7 +18,7 @@
 
 ## Download
 
-Download the latest `DeepSeek Harness_x64-setup.exe` from the [Releases](https://github.com/fanqie132/dsh-desktop/releases) page and run the installer.
+Download the latest `DeepSeek Harness_x64-setup.exe` from the [Releases](https://github.com/fanqie132/DeepSeekHarnessdesktop/releases) page and run the installer.
 
 > The installer is about 25 MB (without the dsh runtime). On **first launch** it automatically downloads the runtime (~76 MB, updated with DeepSeek releases) and requires internet connectivity.
 

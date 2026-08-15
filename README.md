@@ -18,7 +18,7 @@
 
 ## 下载安装
 
-到 [Releases](https://github.com/fanqie132/dsh-desktop/releases) 下载最新的 `DeepSeek Harness_x64-setup.exe`，双击安装即可。
+到 [Releases](https://github.com/fanqie132/DeepSeekHarnessdesktop/releases) 下载最新的 `DeepSeek Harness_x64-setup.exe`，双击安装即可。
 
 > 安装包约 25MB（不含 dsh 运行时）。**首次启动**会自动下载运行时（约 76MB，随 DeepSeek 版本更新），需要联网，完成后即可正常使用。
 
