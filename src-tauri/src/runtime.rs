@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// runtime 压缩包的下载地址（GitHub Release 固定资产，发布者每次覆盖更新）。
 const RUNTIME_URL: &str =
@@ -39,6 +39,11 @@ pub fn is_ready(app: &AppHandle) -> bool {
 /// 下载最新 runtime.zip 并原子替换 runtime 目录（首次安装与更新共用）。
 /// 调用前应确保没有进程占用 runtime 内的文件。
 pub fn fetch_and_replace_runtime(app: &AppHandle) -> Result<(), String> {
+    let _ = app.emit(
+        "runtime-progress",
+        serde_json::json!({"stage": "download", "message": "正在下载运行时（约 76MB）..."}),
+    );
+
     let rt = runtime_dir(app);
     let parent = rt.parent().expect("runtime 应有父目录").to_path_buf();
     let zip_path = parent.join("dsh-runtime-download.zip");
@@ -50,7 +55,7 @@ pub fn fetch_and_replace_runtime(app: &AppHandle) -> Result<(), String> {
         fs::remove_dir_all(&staging_root).map_err(|e| format!("清理临时目录失败：{e}"))?;
     }
     fs::create_dir_all(&staging_root).map_err(|e| format!("创建临时目录失败：{e}"))?;
-    extract_zip(&zip_path, &staging_root)?;
+    extract_zip(&zip_path, &staging_root, app)?;
 
     // zip 内含 runtime/ 前缀目录
     let staged_runtime = staging_root.join("runtime");
@@ -102,10 +107,15 @@ fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
+fn extract_zip(zip_path: &Path, dest: &Path, app: &AppHandle) -> Result<(), String> {
     let file = File::open(zip_path).map_err(|e| format!("打开压缩包失败：{e}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("解析压缩包失败：{e}"))?;
-    for i in 0..archive.len() {
+    let total = archive.len();
+    let _ = app.emit(
+        "runtime-progress",
+        serde_json::json!({"stage": "extract", "current": 0, "total": total}),
+    );
+    for i in 0..total {
         let mut entry = archive.by_index(i).map_err(|e| format!("读取压缩项失败：{e}"))?;
         let outpath = entry
             .enclosed_name()
@@ -119,6 +129,13 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
             }
             let mut out = File::create(&full).map_err(|e| format!("创建文件失败：{e}"))?;
             std::io::copy(&mut entry, &mut out).map_err(|e| format!("解压文件失败：{e}"))?;
+        }
+        // 每 200 个文件或最后一个时上报进度，避免事件过于频繁
+        if i % 200 == 199 || i + 1 == total {
+            let _ = app.emit(
+                "runtime-progress",
+                serde_json::json!({"stage": "extract", "current": i + 1, "total": total}),
+            );
         }
     }
     Ok(())
