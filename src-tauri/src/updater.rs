@@ -1,7 +1,5 @@
 use std::fs;
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use semver::Version;
@@ -9,24 +7,13 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 use crate::dsh::DshManager;
+use crate::runtime;
 
 const REGISTRY_URL: &str = "https://registry.npmmirror.com/@deepseek-ai/dsh";
 const DSH_HOST: &str = "127.0.0.1";
 const DSH_PORT: u16 = 3080;
 const LABEL_RESTART: &str = "重启更新";
 const LABEL_LATER: &str = "稍后";
-
-/// runtime 根目录：开发期用项目内 runtime，发布期用打包资源目录。
-fn runtime_dir(app: &AppHandle) -> PathBuf {
-    if cfg!(debug_assertions) {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("src-tauri 应有父目录")
-            .join("runtime")
-    } else {
-        crate::strip_verbatim(app.path().resource_dir().expect("无法定位资源目录")).join("runtime")
-    }
-}
 
 /// 启动后延迟数秒，在后台检查 dsh 是否有新版本。
 pub fn spawn_check(app: AppHandle) {
@@ -58,20 +45,17 @@ pub fn spawn_check(app: AppHandle) {
             ))
             .show(move |result| {
                 if result {
-                        let app = app_for_dialog.clone();
-                        std::thread::spawn(move || match update_runtime(&app) {
-                            Ok(()) => {
-                                if let Some(manager) = app.try_state::<DshManager>() {
-                                    manager.restart();
-                                }
-                                reload_after_ready(&app);
-                            }
-                            Err(e) => {
-                                let _ = app.dialog().message(format!("更新失败：{e}"))
-                                    .title("更新失败")
-                                    .show(|_| {});
-                            }
-                        });
+                    let app = app_for_dialog.clone();
+                    std::thread::spawn(move || match update_runtime(&app) {
+                        Ok(()) => reload_after_ready(&app),
+                        Err(e) => {
+                            let _ = app
+                                .dialog()
+                                .message(format!("更新失败：{e}"))
+                                .title("更新失败")
+                                .show(|_| {});
+                        }
+                    });
                 }
             });
     });
@@ -79,7 +63,10 @@ pub fn spawn_check(app: AppHandle) {
 
 /// 从 npm registry 读取 dist-tags.latest。
 fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error>> {
-    let body = ureq::get(REGISTRY_URL).timeout(Duration::from_secs(20)).call()?.into_string()?;
+    let body = ureq::get(REGISTRY_URL)
+        .timeout(Duration::from_secs(20))
+        .call()?
+        .into_string()?;
     let json: serde_json::Value = serde_json::from_str(&body)?;
     json["dist-tags"]["latest"]
         .as_str()
@@ -89,7 +76,7 @@ fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error>> {
 
 /// 读取本地 runtime 中 dsh 的版本。
 fn read_local_version(app: &AppHandle) -> Result<String, Box<dyn std::error::Error>> {
-    let pkg = runtime_dir(app)
+    let pkg = runtime::runtime_dir(app)
         .join("node_modules")
         .join("@deepseek-ai")
         .join("dsh")
@@ -108,38 +95,16 @@ fn compare_version(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// 用 pnpm 更新 runtime 内的 dsh 包到最新版。
-fn update_runtime(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let pnpm = resolve_pnpm();
-    let status = Command::new(&pnpm)
-        .current_dir(runtime_dir(app))
-        .args(["add", "@deepseek-ai/dsh@latest"])
-        .status()?;
-    if !status.success() {
-        return Err(format!("pnpm 更新失败（exit {:?}）", status.code()).into());
+/// 更新 runtime：先停 dsh（释放文件锁），下载最新 runtime.zip 替换，再重启。
+fn update_runtime(app: &AppHandle) -> Result<(), String> {
+    if let Some(manager) = app.try_state::<DshManager>() {
+        manager.stop();
     }
-    Ok(())
-}
-
-/// 定位 pnpm 命令：优先 PATH，回退到 D:\pnpm\bin。
-fn resolve_pnpm() -> PathBuf {
-    if which("pnpm").is_some() {
-        PathBuf::from("pnpm")
-    } else {
-        PathBuf::from("D:\\pnpm\\bin\\pnpm.cmd")
+    let result = runtime::fetch_and_replace_runtime(app);
+    if let Some(manager) = app.try_state::<DshManager>() {
+        manager.start();
     }
-}
-
-fn which(name: &str) -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(if cfg!(windows) { format!("{name}.cmd") } else { name.to_string() });
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    result
 }
 
 /// 等待 dsh 端口就绪后重载主窗口。

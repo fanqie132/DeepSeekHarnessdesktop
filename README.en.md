@@ -20,6 +20,8 @@
 
 Download the latest `DeepSeek Harness_x64-setup.exe` from the [Releases](https://github.com/fanqie132/dsh-desktop/releases) page and run the installer.
 
+> The installer is about 25 MB (without the dsh runtime). On **first launch** it automatically downloads the runtime (~76 MB, updated with DeepSeek releases) and requires internet connectivity.
+
 ## Build from Source
 
 ### Prerequisites
@@ -34,7 +36,7 @@ Download the latest `DeepSeek Harness_x64-setup.exe` from the [Releases](https:/
 ### Steps
 
 ```powershell
-# 1. Install runtime dependencies (hoisted layout configured to avoid Windows long-path issues)
+# 1. Install dev runtime dependencies (hoisted layout configured to avoid Windows long-path issues)
 cd runtime
 pnpm install
 
@@ -48,7 +50,9 @@ pnpm tauri build
 
 Artifact: `src-tauri/target/release/bundle/nsis/DeepSeek Harness_0.1.0_x64-setup.exe`
 
-> Note: `runtime/node_modules` and the bundled `node.exe` are large but regenerable, so they are not committed to the Git repository.
+> Note:
+> - `runtime/node_modules` and the bundled `node.exe` are large but regenerable, so they are not committed to the Git repository.
+> - The release installer does **not** bundle the runtime; on first launch it downloads `runtime.zip` from the GitHub Release and extracts it to the install directory (see `src-tauri/src/runtime.rs`). When publishing a new version, rebuild with `tar -a -cf runtime.zip -C .. runtime` and overwrite the `runtime` tag asset on Releases.
 
 ## Tech Stack
 

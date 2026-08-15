@@ -31,3 +31,6 @@ src-tauri/resources/node/
 
 # 运行时日志
 dsh.log
+
+# runtime 压缩包（发布产物，GitHub Release 分发）
+runtime.zip

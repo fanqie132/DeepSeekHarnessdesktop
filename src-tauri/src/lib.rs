@@ -1,10 +1,14 @@
 mod dsh;
+mod runtime;
 mod tray;
 mod updater;
 
 use dsh::DshManager;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::{Manager, WindowEvent};
+use tauri_plugin_dialog::DialogExt;
 
 /// 去掉 Windows verbatim 路径前缀（`\\?\`），node 等程序无法解析该格式。
 pub fn strip_verbatim(p: PathBuf) -> PathBuf {
@@ -39,26 +43,15 @@ fn resolve_node(app: &tauri::App) -> PathBuf {
     }
 }
 
-/// dsh 的 bin.js 入口。
-fn resolve_dsh_entry(app: &tauri::App) -> PathBuf {
-    runtime_base(app)
-        .join("runtime")
-        .join("node_modules")
-        .join("@deepseek-ai")
-        .join("dsh")
-        .join("lib")
-        .join("bin.js")
-}
-
 /// dsh 子进程日志文件位置。
-fn resolve_dsh_log(app: &tauri::App) -> PathBuf {
+fn resolve_dsh_log(handle: &tauri::AppHandle) -> PathBuf {
     if cfg!(debug_assertions) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("src-tauri 应有父目录")
             .join("dsh.log")
     } else {
-        strip_verbatim(app.path().resource_dir().expect("无法定位资源目录")).join("dsh.log")
+        strip_verbatim(handle.path().resource_dir().expect("无法定位资源目录")).join("dsh.log")
     }
 }
 
@@ -69,10 +62,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let node = resolve_node(app);
-            let entry = resolve_dsh_entry(app);
-            let log = resolve_dsh_log(app);
+            let entry = runtime::runtime_entry(&app.handle());
+            let log = resolve_dsh_log(app.handle());
             let manager = DshManager::new(node, entry, log);
-            manager.start();
             app.manage(manager);
 
             // 关闭窗口时隐藏到托盘（托盘“退出”才真正退出）
@@ -88,6 +80,29 @@ pub fn run() {
 
             tray::setup(app)?;
             updater::spawn_check(app.handle().clone());
+
+            // 后台确保 runtime 就绪（首次启动需下载），就绪后拉起 dsh
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if !runtime::is_ready(&handle) {
+                    if let Err(e) = runtime::fetch_and_replace_runtime(&handle) {
+                        let log = resolve_dsh_log(&handle);
+                        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&log) {
+                            let _ = writeln!(f, "[init] 运行时下载失败：{e}");
+                        }
+                        let _ = handle
+                            .dialog()
+                            .message(format!("运行时下载失败：{e}"))
+                            .title("DeepSeek Harness 初始化失败")
+                            .show(|_| {});
+                        handle.exit(1);
+                        return;
+                    }
+                }
+                if let Some(manager) = handle.try_state::<DshManager>() {
+                    manager.start();
+                }
+            });
 
             Ok(())
         })

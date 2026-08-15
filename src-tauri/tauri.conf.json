@@ -38,7 +38,6 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../runtime": "runtime",
       "resources/node/node.exe": "node/node.exe"
     }
   }

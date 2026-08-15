@@ -4,6 +4,13 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// CREATE_NO_WINDOW：让 node（控制台程序）在无窗口的后台运行，不弹出控制台窗口。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// 托管 dsh web 子进程生命周期，支持启停与重启。
 pub struct DshManager {
     inner: Mutex<DshInner>,
@@ -38,6 +45,14 @@ impl DshManager {
         inner.child = Some(child);
     }
 
+    /// 停止当前 dsh 进程树（更新/替换 runtime 前调用，释放文件锁）。
+    pub fn stop(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(child) = inner.child.take() {
+            kill_tree(child);
+        }
+    }
+
     /// 停止当前 dsh 进程树并重新启动（更新后调用）。
     pub fn restart(&self) {
         let mut inner = self.inner.lock().unwrap();
@@ -62,13 +77,14 @@ fn spawn_dsh(inner: &DshInner) -> Child {
         inner.entry
     );
     let stdout = log_file.try_clone().expect("failed to clone log handle");
-    Command::new(&inner.node)
-        .arg(&inner.entry)
+    let mut cmd = Command::new(&inner.node);
+    cmd.arg(&inner.entry)
         .arg("web")
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(log_file))
-        .spawn()
-        .expect("failed to start dsh web")
+        .stderr(Stdio::from(log_file));
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.spawn().expect("failed to start dsh web")
 }
 
 /// 终止一个进程的整棵进程树（Windows taskkill /T /F）。
