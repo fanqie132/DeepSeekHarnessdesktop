@@ -4,80 +4,92 @@ mod tray;
 mod updater;
 
 use dsh::DshManager;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 
+/// “图片另存为”：下载图片到内存，弹系统保存框，写入所选路径。
+#[tauri::command]
+async fn save_image(app: tauri::AppHandle, url: String) -> Result<Option<String>, String> {
+    let _ = log_dbg(&format!("save_image called: {url}"));
+    let bytes = tokio::task::spawn_blocking(move || download_bytes(&url))
+        .await
+        .map_err(|e| e.to_string())??;
+    let _ = log_dbg(&format!("downloaded {} bytes", bytes.len()));
+    let path = app
+        .dialog()
+        .file()
+        .set_title("保存图片")
+        .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "svg"])
+        .blocking_save_file();
+    let _ = log_dbg(&format!("save dialog returned: {:?}", path.is_some()));
+    if let Some(p) = path {
+        let pbuf: PathBuf = p.into_path().map_err(|e| format!("路径无效：{e}"))?;
+        fs::write(&pbuf, &bytes).map_err(|e| format!("写入文件失败：{e}"))?;
+        Ok(Some(pbuf.to_string_lossy().into_owned()))
+    } else {
+        Ok(None) // 用户取消
+    }
+}
+
+fn log_dbg(msg: &str) -> Result<(), String> {
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("dsh-saveimage.log"))
+    {
+        let _ = writeln!(f, "[{}] {msg}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+    }
+    Ok(())
+}
+
+/// “图片另存为”（data URL 通道）：前端把图片转 base64 传入，弹系统保存框写入。
+#[tauri::command]
+async fn save_image_data(
+    app: tauri::AppHandle,
+    data: String,
+    _filename: String,
+) -> Result<Option<String>, String> {
+    use base64::Engine;
+    let base64_str = data
+        .split(',')
+        .nth(1)
+        .ok_or_else(|| "无效的图片数据".to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_str.trim())
+        .map_err(|e| format!("解码图片失败：{e}"))?;
+    let path = app
+        .dialog()
+        .file()
+        .set_title("保存图片")
+        .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "svg"])
+        .blocking_save_file();
+    if let Some(p) = path {
+        let pbuf: PathBuf = p.into_path().map_err(|e| format!("路径无效：{e}"))?;
+        fs::write(&pbuf, &bytes).map_err(|e| format!("写入文件失败：{e}"))?;
+        Ok(Some(pbuf.to_string_lossy().into_owned()))
+    } else {
+        Ok(None)
+    }
+}
+
+fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let mut reader = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(60))
+        .call()
+        .map_err(|e| format!("下载失败：{e}"))?
+        .into_reader();
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut buf).map_err(|e| format!("读取失败：{e}"))?;
+    Ok(buf)
+}
+
 /// 注入到 dsh 页面的自定义右键菜单脚本：
 /// 文本区域：复制 / 粘贴 / 全选；图片：复制 / 复制链接 / 另存为（去掉浏览器的“更多工具”）。
-const CONTEXT_MENU_JS: &str = r#"(function () {
-  if (window.__dshCtxMenu) return;
-  window.__dshCtxMenu = true;
-  var menu = document.createElement('div');
-  menu.id = '__dsh-ctxmenu';
-  menu.style.cssText = 'position:fixed;z-index:2147483647;display:none;min-width:150px;background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px;font-family:system-ui,sans-serif;font-size:13px;color:#1f2937;user-select:none;';
-  document.documentElement.appendChild(menu);
-  var dark = window.matchMedia('(prefers-color-scheme: dark)');
-  function applyTheme() {
-    if (dark.matches) {
-      menu.style.background = '#1f2937'; menu.style.color = '#f3f4f6'; menu.style.borderColor = 'rgba(255,255,255,.12)';
-    } else {
-      menu.style.background = '#ffffff'; menu.style.color = '#1f2937'; menu.style.borderColor = 'rgba(0,0,0,.1)';
-    }
-  }
-  dark.addEventListener('change', applyTheme); applyTheme();
-  function hide() { menu.style.display = 'none'; }
-  function show(x, y, items) {
-    menu.innerHTML = '';
-    items.forEach(function (it) {
-      var item = document.createElement('div');
-      item.textContent = it.label;
-      item.style.cssText = 'padding:7px 12px;border-radius:6px;cursor:pointer;';
-      item.addEventListener('mouseenter', function () { item.style.background = dark.matches ? 'rgba(255,255,255,.1)' : '#f3f4f6'; });
-      item.addEventListener('mouseleave', function () { item.style.background = 'transparent'; });
-      item.addEventListener('click', function () { hide(); if (it.action) it.action(); });
-      menu.appendChild(item);
-    });
-    var r = menu.getBoundingClientRect();
-    menu.style.left = Math.min(x, window.innerWidth - r.width - 4) + 'px';
-    menu.style.top = Math.min(y, window.innerHeight - r.height - 4) + 'px';
-    menu.style.display = 'block';
-  }
-  document.addEventListener('click', hide);
-  document.addEventListener('scroll', hide, true);
-  document.addEventListener('contextmenu', function (e) {
-    var img = e.target.closest ? e.target.closest('img') : null;
-    if (img) {
-      e.preventDefault();
-      var url = img.currentSrc || img.src;
-      show(e.clientX, e.clientY, [
-        { label: '复制图片', action: function () {
-            fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
-              var t = b.type && b.type.indexOf('image/') === 0 ? b.type : 'image/png';
-              try { navigator.clipboard.write([new ClipboardItem({ [t]: b })]); } catch (err) {}
-            }).catch(function () {});
-          } },
-        { label: '复制图片链接', action: function () { navigator.clipboard.writeText(url); } },
-        { label: '图片另存为', action: function () {
-            var a = document.createElement('a');
-            a.href = url;
-            a.download = (img.alt || 'image') + '.' + ((url.split('.').pop() || 'png').split('?')[0]);
-            a.click();
-          } },
-      ]);
-      return;
-    }
-    e.preventDefault();
-    show(e.clientX, e.clientY, [
-      { label: '复制', action: function () { document.execCommand('copy'); } },
-      { label: '粘贴', action: function () { document.execCommand('paste'); } },
-      { label: '全选', action: function () { document.execCommand('selectAll'); } },
-    ]);
-  });
-})();"#;
+const CONTEXT_MENU_JS: &str = include_str!("../context-menu.js");
 
 /// 去掉 Windows verbatim 路径前缀（`\\?\`），node 等程序无法解析该格式。
 pub fn strip_verbatim(p: PathBuf) -> PathBuf {
@@ -131,7 +143,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
+                if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(
+                    std::env::temp_dir().join("dsh-pageload.log"),
+                ) {
+                    let _ = writeln!(f, "page finished: {}", payload.url());
+                }
                 let _ = webview.eval(CONTEXT_MENU_JS);
+                // 检查 __TAURI__ 是否在远程页面可用
+                let _ = webview.eval("setTimeout(function(){ try { fetch('http://127.0.0.1:9999/tauri-check?has=' + (!!window.__TAURI__)) } catch(e){} }, 2000)");
             }
         })
         .setup(|app| {
@@ -180,7 +199,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![save_image, save_image_data])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
