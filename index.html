@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepSeek Harness</title>
+    <script type="module" src="/src/main.ts" defer></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        background: #0f1115;
+        color: #e8eaed;
+        font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        overflow: hidden;
+        user-select: none;
+      }
+      #loading {
+        text-align: center;
+      }
+      .spinner {
+        width: 36px;
+        height: 36px;
+        margin: 0 auto 20px;
+        border: 3px solid rgba(255, 255, 255, 0.15);
+        border-top-color: #4d9fff;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      #status {
+        font-size: 14px;
+        color: #9aa0a6;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="loading">
+      <div class="spinner"></div>
+      <p id="status">正在启动 DeepSeek Harness...</p>
+    </div>
+  </body>
+</html>
