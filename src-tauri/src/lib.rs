@@ -7,8 +7,77 @@ use dsh::DshManager;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use tauri::webview::PageLoadEvent;
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
+
+/// 注入到 dsh 页面的自定义右键菜单脚本：
+/// 文本区域：复制 / 粘贴 / 全选；图片：复制 / 复制链接 / 另存为（去掉浏览器的“更多工具”）。
+const CONTEXT_MENU_JS: &str = r#"(function () {
+  if (window.__dshCtxMenu) return;
+  window.__dshCtxMenu = true;
+  var menu = document.createElement('div');
+  menu.id = '__dsh-ctxmenu';
+  menu.style.cssText = 'position:fixed;z-index:2147483647;display:none;min-width:150px;background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px;font-family:system-ui,sans-serif;font-size:13px;color:#1f2937;user-select:none;';
+  document.documentElement.appendChild(menu);
+  var dark = window.matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    if (dark.matches) {
+      menu.style.background = '#1f2937'; menu.style.color = '#f3f4f6'; menu.style.borderColor = 'rgba(255,255,255,.12)';
+    } else {
+      menu.style.background = '#ffffff'; menu.style.color = '#1f2937'; menu.style.borderColor = 'rgba(0,0,0,.1)';
+    }
+  }
+  dark.addEventListener('change', applyTheme); applyTheme();
+  function hide() { menu.style.display = 'none'; }
+  function show(x, y, items) {
+    menu.innerHTML = '';
+    items.forEach(function (it) {
+      var item = document.createElement('div');
+      item.textContent = it.label;
+      item.style.cssText = 'padding:7px 12px;border-radius:6px;cursor:pointer;';
+      item.addEventListener('mouseenter', function () { item.style.background = dark.matches ? 'rgba(255,255,255,.1)' : '#f3f4f6'; });
+      item.addEventListener('mouseleave', function () { item.style.background = 'transparent'; });
+      item.addEventListener('click', function () { hide(); if (it.action) it.action(); });
+      menu.appendChild(item);
+    });
+    var r = menu.getBoundingClientRect();
+    menu.style.left = Math.min(x, window.innerWidth - r.width - 4) + 'px';
+    menu.style.top = Math.min(y, window.innerHeight - r.height - 4) + 'px';
+    menu.style.display = 'block';
+  }
+  document.addEventListener('click', hide);
+  document.addEventListener('scroll', hide, true);
+  document.addEventListener('contextmenu', function (e) {
+    var img = e.target.closest ? e.target.closest('img') : null;
+    if (img) {
+      e.preventDefault();
+      var url = img.currentSrc || img.src;
+      show(e.clientX, e.clientY, [
+        { label: '复制图片', action: function () {
+            fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
+              var t = b.type && b.type.indexOf('image/') === 0 ? b.type : 'image/png';
+              try { navigator.clipboard.write([new ClipboardItem({ [t]: b })]); } catch (err) {}
+            }).catch(function () {});
+          } },
+        { label: '复制图片链接', action: function () { navigator.clipboard.writeText(url); } },
+        { label: '图片另存为', action: function () {
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = (img.alt || 'image') + '.' + ((url.split('.').pop() || 'png').split('?')[0]);
+            a.click();
+          } },
+      ]);
+      return;
+    }
+    e.preventDefault();
+    show(e.clientX, e.clientY, [
+      { label: '复制', action: function () { document.execCommand('copy'); } },
+      { label: '粘贴', action: function () { document.execCommand('paste'); } },
+      { label: '全选', action: function () { document.execCommand('selectAll'); } },
+    ]);
+  });
+})();"#;
 
 /// 去掉 Windows verbatim 路径前缀（`\\?\`），node 等程序无法解析该格式。
 pub fn strip_verbatim(p: PathBuf) -> PathBuf {
@@ -60,6 +129,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                let _ = webview.eval(CONTEXT_MENU_JS);
+            }
+        })
         .setup(|app| {
             let node = resolve_node(app);
             let entry = runtime::runtime_entry(&app.handle());

@@ -16,8 +16,8 @@
         align-items: center;
         justify-content: center;
         height: 100vh;
-        background: #0f1115;
-        color: #e8eaed;
+        background: #ffffff;
+        color: #1f2937;
         font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
         overflow: hidden;
         user-select: none;
@@ -26,66 +26,28 @@
         text-align: center;
       }
       #whale {
-        width: 88px;
-        height: 64px;
+        width: 128px;
+        height: 128px;
         margin: 0 auto 24px;
         animation: swim 3s ease-in-out infinite;
       }
-      .pixel {
-        width: 8px;
-        height: 8px;
-        box-shadow:
-          0 32px 0 0 #3b82f6, 8px 32px 0 0 #3b82f6, 16px 32px 0 0 #3b82f6,
-          24px 24px 0 0 #3b82f6, 32px 24px 0 0 #3b82f6, 40px 24px 0 0 #3b82f6,
-          48px 24px 0 0 #3b82f6, 56px 24px 0 0 #3b82f6, 64px 24px 0 0 #3b82f6,
-          72px 24px 0 0 #60a5fa, 80px 24px 0 0 #60a5fa,
-          24px 16px 0 0 #2563eb, 32px 16px 0 0 #2563eb, 40px 16px 0 0 #2563eb,
-          48px 16px 0 0 #2563eb, 56px 16px 0 0 #2563eb, 64px 16px 0 0 #2563eb,
-          72px 16px 0 0 #3b82f6, 80px 16px 0 0 #60a5fa,
-          24px 8px 0 0 #1d4ed8, 32px 8px 0 0 #1d4ed8, 40px 8px 0 0 #2563eb,
-          48px 8px 0 0 #2563eb, 56px 8px 0 0 #2563eb, 64px 8px 0 0 #3b82f6,
-          72px 8px 0 0 #3b82f6,
-          24px 0 0 0 #1d4ed8, 32px 0 0 0 #1e40af, 40px 0 0 0 #1e40af,
-          48px 0 0 0 #1e40af, 56px 0 0 0 #1e40af, 64px 0 0 0 #2563eb,
-          0 40px 0 0 #3b82f6, 8px 40px 0 0 #3b82f6, 16px 40px 0 0 #3b82f6,
-          24px 40px 0 0 #3b82f6, 32px 40px 0 0 #2563eb, 40px 40px 0 0 #2563eb,
-          48px 40px 0 0 #2563eb, 56px 40px 0 0 #3b82f6, 64px 40px 0 0 #3b82f6,
-          72px 40px 0 0 #60a5fa, 80px 40px 0 0 #60a5fa,
-          8px 48px 0 0 #3b82f6, 16px 48px 0 0 #3b82f6, 24px 48px 0 0 #3b82f6,
-          32px 48px 0 0 #3b82f6, 40px 48px 0 0 #3b82f6, 48px 48px 0 0 #3b82f6,
-          56px 48px 0 0 #3b82f6, 64px 48px 0 0 #60a5fa, 72px 48px 0 0 #60a5fa,
-          80px 48px 0 0 #93c5fd, 88px 48px 0 0 #93c5fd,
-          8px 56px 0 0 #3b82f6, 16px 56px 0 0 #3b82f6, 24px 56px 0 0 #3b82f6,
-          32px 56px 0 0 #3b82f6, 40px 56px 0 0 #3b82f6, 48px 56px 0 0 #60a5fa,
-          56px 56px 0 0 #60a5fa, 64px 56px 0 0 #93c5fd, 72px 56px 0 0 #93c5fd;
+      #whale img {
+        width: 100%;
+        height: 100%;
       }
       @keyframes swim {
         0%, 100% { transform: translateY(0); }
         50% { transform: translateY(-10px); }
       }
+      #status {
+        font-size: 15px;
+        color: #374151;
+      }
       #quote {
-        margin-top: 16px;
+        margin-top: 12px;
         font-size: 13px;
         color: #6b7280;
         font-style: italic;
-      }
-      .spinner {
-        width: 36px;
-        height: 36px;
-        margin: 0 auto 20px;
-        border: 3px solid rgba(255, 255, 255, 0.15);
-        border-top-color: #4d9fff;
-        border-radius: 50%;
-        animation: spin 0.9s linear infinite;
-      }
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-      #status {
-        font-size: 14px;
-        color: #9aa0a6;
       }
       #progress-wrap {
         display: none;
@@ -95,14 +57,14 @@
       #progress-bar {
         width: 100%;
         height: 6px;
-        background: rgba(255, 255, 255, 0.1);
+        background: #e5e7eb;
         border-radius: 3px;
         overflow: hidden;
       }
       #progress-fill {
         width: 0%;
         height: 100%;
-        background: #4d9fff;
+        background: #4176e6;
         border-radius: 3px;
         transition: width 0.2s ease;
       }
@@ -116,7 +78,7 @@
 
   <body>
     <div id="loading">
-      <div id="whale"><div class="pixel"></div></div>
+      <div id="whale"><img src="/whale.svg" alt="DeepSeek Harness" /></div>
       <p id="status">正在启动 DeepSeek Harness...</p>
       <p id="quote"></p>
       <div id="progress-wrap">
