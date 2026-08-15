@@ -5,6 +5,12 @@ use std::process::Command;
 
 use tauri::{AppHandle, Emitter, Manager};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// runtime 压缩包的下载地址（GitHub Release 固定资产，发布者每次覆盖更新）。
 const RUNTIME_URL: &str =
     "https://github.com/fanqie132/dsh-desktop/releases/download/runtime/runtime.zip";
@@ -95,12 +101,11 @@ pub fn fetch_and_replace_runtime(app: &AppHandle) -> Result<(), String> {
 /// 用系统自带 curl.exe 下载（自动读取 HTTPS_PROXY 等系统代理环境变量）。
 /// 依赖 Windows 10 1803+ 内置的 curl。
 fn download_file(url: &str, dest: &Path) -> Result<(), String> {
-    let status = Command::new("curl")
-        .args(["-s", "-L", "--fail", "-o"])
-        .arg(dest)
-        .arg(url)
-        .status()
-        .map_err(|e| format!("调用 curl 失败：{e}"))?;
+    let mut cmd = Command::new("curl");
+    cmd.args(["-s", "-L", "--fail", "-o"]).arg(dest).arg(url);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let status = cmd.status().map_err(|e| format!("调用 curl 失败：{e}"))?;
     if !status.success() {
         return Err(format!("下载运行时失败（curl 退出码 {:?}）", status.code()));
     }

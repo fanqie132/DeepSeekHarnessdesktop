@@ -5,9 +5,23 @@ const POLL_INTERVAL_MS = 500;
 const MAX_ATTEMPTS = 600;
 
 const statusEl = document.getElementById("status") as HTMLElement;
+const quoteEl = document.getElementById("quote") as HTMLElement;
 const progressWrapEl = document.getElementById("progress-wrap") as HTMLElement;
 const progressFillEl = document.getElementById("progress-fill") as HTMLElement;
 const progressTextEl = document.getElementById("progress-text") as HTMLElement;
+
+const QUOTES = [
+  "正在唤醒鲸鱼...",
+  "让 AI 替你搬砖...",
+  "翻个工作区看看...",
+  "校准 3080 端口...",
+  "召集 agent 小队...",
+  "把插件们叫起床...",
+  "准备薅官方更新...",
+  "加载中，别眨眼...",
+  "鲸鱼正在深呼吸...",
+  "擦亮你的工作台...",
+];
 
 interface ProgressPayload {
   stage: "download" | "extract";
@@ -24,6 +38,7 @@ function showProgress() {
 
 function fail(reason: string) {
   statusEl.textContent = reason;
+  quoteEl.textContent = "";
 }
 
 async function checkReady(): Promise<boolean> {
@@ -47,16 +62,20 @@ async function poll() {
   }
   // 若已有明确的运行时进度提示，则轮询期间不覆盖其文案
   if (progressWrapEl.style.display === "none") {
-    statusEl.textContent = `正在启动 DeepSeek Harness... (${Math.round((attempts * POLL_INTERVAL_MS) / 1000)}s)`;
+    statusEl.textContent = `正在启动 DeepSeek Harness...`;
   }
   setTimeout(poll, POLL_INTERVAL_MS);
 }
+
+// 启动时随机显示一句趣味文案
+quoteEl.textContent = QUOTES[Math.floor(Math.random() * QUOTES.length)];
 
 // 接收 Rust 侧运行时下载/解压进度
 void listen<ProgressPayload>("runtime-progress", (event) => {
   const p = event.payload;
   if (p.stage === "download") {
     showProgress();
+    quoteEl.textContent = "";
     statusEl.textContent = p.message ?? "正在下载运行时...";
     progressTextEl.textContent = "";
     progressFillEl.style.width = "0%";

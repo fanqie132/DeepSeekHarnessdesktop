@@ -53,6 +53,18 @@ impl DshManager {
         }
     }
 
+    /// 让独立 taskkill 进程后台清理 dsh 进程树，不等待（用于托盘退出，界面立即关闭）。
+    pub fn stop_detached(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(child) = inner.child.take() {
+            let mut cmd = Command::new("taskkill");
+            cmd.args(["/PID", &child.id().to_string(), "/T", "/F"]);
+            #[cfg(windows)]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            let _ = cmd.spawn();
+        }
+    }
+
     /// 停止当前 dsh 进程树并重新启动（更新后调用）。
     pub fn restart(&self) {
         let mut inner = self.inner.lock().unwrap();
@@ -89,10 +101,11 @@ fn spawn_dsh(inner: &DshInner) -> Child {
 
 /// 终止一个进程的整棵进程树（Windows taskkill /T /F）。
 fn kill_tree(mut child: Child) {
-    let _ = Command::new("taskkill")
-        .args(["/PID", &child.id().to_string(), "/T", "/F"])
-        .spawn()
-        .and_then(|mut c| c.wait());
+    let mut cmd = Command::new("taskkill");
+    cmd.args(["/PID", &child.id().to_string(), "/T", "/F"]);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let _ = cmd.spawn().and_then(|mut c| c.wait());
     let _ = child.kill();
 }
 

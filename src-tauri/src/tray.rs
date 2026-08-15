@@ -24,9 +24,9 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
                 }
             }
             "quit" => {
-                // 先显式停止 dsh，避免退出后残留孤儿进程
+                // 让独立 taskkill 后台清理 dsh，界面立即关闭
                 if let Some(manager) = app.try_state::<DshManager>() {
-                    manager.stop();
+                    manager.stop_detached();
                 }
                 app.exit(0);
             }
