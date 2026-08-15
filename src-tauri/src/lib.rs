@@ -107,6 +107,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(manager) = app_handle.try_state::<DshManager>() {
+                    manager.stop();
+                }
+            }
+        });
 }

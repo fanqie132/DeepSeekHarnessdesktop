@@ -2,6 +2,8 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 
+use crate::dsh::DshManager;
+
 /// 创建系统托盘：显示窗口 / 退出。
 pub fn setup(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示", true, None::<&str>)?;
@@ -21,7 +23,13 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
                     let _ = window.set_focus();
                 }
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                // 先显式停止 dsh，避免退出后残留孤儿进程
+                if let Some(manager) = app.try_state::<DshManager>() {
+                    manager.stop();
+                }
+                app.exit(0);
+            }
             _ => {}
         })
         .build(app)?;
