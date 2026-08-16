@@ -1,5 +1,4 @@
 mod dsh;
-mod notify;
 mod runtime;
 mod tray;
 mod updater;
@@ -178,8 +177,6 @@ pub fn run() {
 
             tray::setup(app)?;
             updater::spawn_check(app.handle().clone());
-            // 提示音：任务完成（goal phase active→complete）时播放系统音
-            notify::spawn();
 
             // 后台确保 runtime 就绪（首次启动需下载），就绪后拉起 dsh
             let handle = app.handle().clone();

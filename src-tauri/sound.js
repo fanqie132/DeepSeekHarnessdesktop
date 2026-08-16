@@ -1,34 +1,58 @@
 (function () {
-  if (window.__dshApproveSound) return;
-  window.__dshApproveSound = true;
+  if (window.__dshSound) return;
+  window.__dshSound = true;
 
-  // 审批/提问提示音：双音提醒
+  // 单例 Web Audio 上下文，首次用户交互预热
+  var ctx = null;
+  function audio() {
+    if (!ctx) {
+      try {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch (e) {}
+    }
+    return ctx;
+  }
+  // 预热（页面加载 + 用户交互）
+  function warm() {
+    var c = audio();
+    if (c && c.state === "suspended") c.resume().catch(function () {});
+  }
+  warm();
+  ["pointerdown", "keydown", "touchstart"].forEach(function (ev) {
+    window.addEventListener(ev, warm, { once: false, passive: true });
+  });
+
+  function tone(freq, when, dur) {
+    var c = audio();
+    if (!c) return;
+    var osc = c.createOscillator();
+    var g = c.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.22, c.currentTime + when);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + when + dur);
+    osc.connect(g);
+    g.connect(c.destination);
+    osc.start(c.currentTime + when);
+    osc.stop(c.currentTime + when + dur + 0.05);
+  }
+  // 弹窗（审批/提问/计划评审）：双音提醒
   function playApprove() {
-    try {
-      var ctx = new (window.AudioContext || window.webkitAudioContext)();
-      var play = function (freq, when, dur) {
-        var osc = ctx.createOscillator();
-        var g = ctx.createGain();
-        osc.type = "sine";
-        osc.frequency.value = freq;
-        g.gain.setValueAtTime(0.22, ctx.currentTime + when);
-        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + when + dur);
-        osc.connect(g);
-        g.connect(ctx.destination);
-        osc.start(ctx.currentTime + when);
-        osc.stop(ctx.currentTime + when + dur + 0.05);
-      };
-      play(880, 0, 0.5);
-      play(660, 0.15, 0.4);
-    } catch (e) {}
+    tone(880, 0, 0.5);
+    tone(660, 0.15, 0.4);
+  }
+  // 完成（每轮回复结束 / goal 完成）：上行三音
+  function playComplete() {
+    tone(523, 0, 0.15);
+    tone(659, 0.15, 0.15);
+    tone(784, 0.3, 0.4);
   }
 
-  // 边沿检测：监控弹窗/接管面板从无到有，出现时响一次
-  // 覆盖：通用 modal(aria-modal)、审批(data-approval-key)、提问(data-question-key)、计划评审(data-plan-review-key)
+  // ---- 弹窗边沿检测（审批/提问/计划评审，不含 aria-modal 设置弹窗）----
   var active = false;
-  function scan() {
+  function scanModal() {
     var modal = document.querySelector(
-      '[aria-modal="true"], [data-approval-key], [data-question-key], [data-plan-review-key]'
+      "[data-approval-key], [data-question-key], [data-plan-review-key]"
     );
     if (modal && !active) {
       active = true;
@@ -39,11 +63,59 @@
   }
   try {
     if (document.body) {
-      new MutationObserver(scan).observe(document.body, {
+      new MutationObserver(scanModal).observe(document.body, {
         childList: true,
         subtree: true,
       });
-      scan();
+      scanModal();
     }
   } catch (e) {}
+
+  // ---- 完成检测：轮询 session.list，running 翻转 + goal 完成 ----
+  var runningState = {};
+  var goalPhase = {};
+  var completedGoal = {};
+  var lastCompleteAt = {};
+  function fetchSessions() {
+    return fetch("/api/session.list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "client-request",
+        rpcId: "snd" + Date.now(),
+        method: "session.list",
+        payload: {},
+      }),
+    })
+      .then(function (r) { return r.json(); })
+      .catch(function () { return null; });
+  }
+  function onSessions(json) {
+    var items = (json && json.result && json.result.value && json.result.value.items) || [];
+    var now = Date.now();
+    items.forEach(function (s) {
+      var id = s.sessionId;
+      var running = !!s.running;
+      // 每轮回复结束：running true→false，30s 节流
+      var prevRunning = runningState[id];
+      if (!running && prevRunning === true) {
+        if (!lastCompleteAt[id] || now - lastCompleteAt[id] > 30000) {
+          lastCompleteAt[id] = now;
+          playComplete();
+        }
+      }
+      runningState[id] = running;
+      // goal 完成：phase active→complete，每 sessionId 一次
+      var phase = (s.projections && s.projections.values && s.projections.values.goal && s.projections.values.goal.phase) || "";
+      var prevPhase = goalPhase[id];
+      if (phase === "complete" && prevPhase === "active" && !completedGoal[id]) {
+        completedGoal[id] = true;
+        playComplete();
+      }
+      goalPhase[id] = phase;
+    });
+  }
+  setInterval(function () {
+    fetchSessions().then(onSessions);
+  }, 1000);
 })();
