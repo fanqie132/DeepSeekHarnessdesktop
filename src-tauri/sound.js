@@ -23,10 +23,13 @@
     } catch (e) {}
   }
 
-  // 边沿检测：监控 aria-modal 弹窗（审批/提问）从无到有，出现时响一次
+  // 边沿检测：监控弹窗/接管面板从无到有，出现时响一次
+  // 覆盖：通用 modal(aria-modal)、审批(data-approval-key)、提问(data-question-key)、计划评审(data-plan-review-key)
   var active = false;
   function scan() {
-    var modal = document.querySelector('[aria-modal="true"]');
+    var modal = document.querySelector(
+      '[aria-modal="true"], [data-approval-key], [data-question-key], [data-plan-review-key]'
+    );
     if (modal && !active) {
       active = true;
       playApprove();
