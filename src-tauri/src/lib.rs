@@ -1,4 +1,5 @@
 mod dsh;
+mod notify;
 mod runtime;
 mod tray;
 mod updater;
@@ -10,6 +11,9 @@ use std::path::{Path, PathBuf};
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
+
+/// 审批/提问提示音脚本（aria-modal 弹窗边沿检测，注入 dsh 页面）。
+const SOUND_JS: &str = include_str!("../sound.js");
 
 /// “图片另存为”：下载图片到内存，弹系统保存框，写入所选路径。
 #[tauri::command]
@@ -149,8 +153,8 @@ pub fn run() {
                     let _ = writeln!(f, "page finished: {}", payload.url());
                 }
                 let _ = webview.eval(CONTEXT_MENU_JS);
-                // 检查 __TAURI__ 是否在远程页面可用
-                let _ = webview.eval("setTimeout(function(){ try { fetch('http://127.0.0.1:9999/tauri-check?has=' + (!!window.__TAURI__)) } catch(e){} }, 2000)");
+                // 审批/提问提示音（aria-modal 弹窗出现时）
+                let _ = webview.eval(SOUND_JS);
             }
         })
         .setup(|app| {
@@ -174,6 +178,8 @@ pub fn run() {
 
             tray::setup(app)?;
             updater::spawn_check(app.handle().clone());
+            // 提示音：任务完成（goal phase active→complete）时播放系统音
+            notify::spawn();
 
             // 后台确保 runtime 就绪（首次启动需下载），就绪后拉起 dsh
             let handle = app.handle().clone();
