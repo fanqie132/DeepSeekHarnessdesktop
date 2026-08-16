@@ -29,7 +29,7 @@
     var g = c.createGain();
     osc.type = "sine";
     osc.frequency.value = freq;
-    g.gain.setValueAtTime(0.22, c.currentTime + when);
+    g.gain.setValueAtTime(0.65, c.currentTime + when);
     g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + when + dur);
     osc.connect(g);
     g.connect(c.destination);
