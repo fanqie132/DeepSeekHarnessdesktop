@@ -4,10 +4,19 @@
 
   // 单例 Web Audio 上下文，首次用户交互预热
   var ctx = null;
+  var comp = null;
   function audio() {
     if (!ctx) {
       try {
         ctx = new (window.AudioContext || window.webkitAudioContext)();
+        // 软限幅器：多音叠加时压住峰值，防削波失真（允许增益提到 1.0）
+        comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -3;
+        comp.knee.value = 0;
+        comp.ratio.value = 20;
+        comp.attack.value = 0.001;
+        comp.release.value = 0.1;
+        comp.connect(ctx.destination);
       } catch (e) {}
     }
     return ctx;
@@ -29,10 +38,10 @@
     var g = c.createGain();
     osc.type = "sine";
     osc.frequency.value = freq;
-    g.gain.setValueAtTime(0.65, c.currentTime + when);
+    g.gain.setValueAtTime(1.0, c.currentTime + when);
     g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + when + dur);
     osc.connect(g);
-    g.connect(c.destination);
+    g.connect(comp || c.destination);
     osc.start(c.currentTime + when);
     osc.stop(c.currentTime + when + dur + 0.05);
   }
