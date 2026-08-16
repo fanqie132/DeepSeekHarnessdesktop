@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -124,11 +125,13 @@ impl DshManager {
         }
     }
 
-    /// 停止当前 dsh 进程树并重新启动（更新后调用）。
+    /// 停止当前 dsh 进程树并重新启动（更新/插件生效后调用）。
+    /// 完全结束旧进程（含子进程），等待端口释放后再启动新进程。
     pub fn restart(&self) {
         let mut inner = self.inner.lock().unwrap();
         if let Some(child) = inner.child.take() {
             kill_tree(child);
+            wait_port_free(3080, Duration::from_secs(10));
         }
         let child = spawn_dsh(&inner);
         inner.child = Some(child);
@@ -212,6 +215,18 @@ fn kill_tree(mut child: Child) {
     cmd.creation_flags(CREATE_NO_WINDOW);
     let _ = cmd.spawn().and_then(|mut c| c.wait());
     let _ = child.kill();
+}
+
+/// 轮询等待端口可绑定（旧进程退出后端口释放），避免新进程绑定冲突。
+fn wait_port_free(port: u16, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let ok = std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+        if ok {
+            return; // 绑定成功即端口已释放（测试用的 listener 随作用域结束自动释放）
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 impl Drop for DshManager {
