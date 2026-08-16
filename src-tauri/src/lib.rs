@@ -157,7 +157,8 @@ pub fn run() {
             let node = resolve_node(app);
             let entry = runtime::runtime_entry(&app.handle());
             let log = resolve_dsh_log(app.handle());
-            let manager = DshManager::new(node, entry, log);
+            let cert_dir = runtime_base(app).join("certs");
+            let manager = DshManager::new(node, entry, log, cert_dir);
             app.manage(manager);
 
             // 关闭窗口时隐藏到托盘（托盘“退出”才真正退出）

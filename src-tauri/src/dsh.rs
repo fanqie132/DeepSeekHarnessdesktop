@@ -78,13 +78,14 @@ struct DshInner {
     node: PathBuf,
     entry: PathBuf,
     log: PathBuf,
+    cert_dir: PathBuf,
     #[cfg(windows)]
     job: Option<KillOnCloseJob>,
 }
 
 impl DshManager {
-    /// node: node 可执行文件路径；entry: dsh 的 bin.js 路径；log: 子进程日志文件。
-    pub fn new(node: PathBuf, entry: PathBuf, log: PathBuf) -> Self {
+    /// node: node 可执行文件路径；entry: dsh 的 bin.js 路径；log: 子进程日志文件；cert_dir: 转发器证书目录。
+    pub fn new(node: PathBuf, entry: PathBuf, log: PathBuf, cert_dir: PathBuf) -> Self {
         Self {
             inner: Mutex::new(DshInner {
                 child: None,
@@ -92,6 +93,7 @@ impl DshManager {
                 node,
                 entry,
                 log,
+                cert_dir,
                 #[cfg(windows)]
                 job: KillOnCloseJob::new(),
             }),
@@ -225,6 +227,53 @@ fn registry_has_github_token() -> &'static str {
     }
 }
 
+/// 检测当前局域网 IPv4 地址（私网段，排除 loopback 与 Tailscale 的 100.x）。
+fn lan_ipv4() -> Option<std::net::Ipv4Addr> {
+    let ifaces = if_addrs::get_if_addrs().ok()?;
+    for iface in ifaces {
+        if let std::net::IpAddr::V4(ip) = iface.ip() {
+            let o = ip.octets();
+            let is_private = o[0] == 10
+                || (o[0] == 172 && (16..=31).contains(&o[1]))
+                || (o[0] == 192 && o[1] == 168);
+            let is_tailscale = o[0] == 100 && (64..=127).contains(&o[1]);
+            if is_private && !is_tailscale {
+                return Some(ip);
+            }
+        }
+    }
+    None
+}
+
+/// 确保局域网转发器证书存在（SAN 含当前局域网 IP），返回 (pfx 路径, 密码)。
+/// 证书不存在或 IP 变化时用 PowerShell 重新生成。
+pub fn ensure_forwarder_cert(cert_dir: &std::path::Path) -> Option<(PathBuf, String)> {
+    use std::fs;
+    let pass = "dsh-fwd".to_string();
+    let pfx = cert_dir.join("forwarder.pfx");
+    let current_ip = lan_ipv4()?.to_string();
+    // 复用条件：文件存在
+    if pfx.exists() {
+        return Some((pfx, pass));
+    }
+    if fs::create_dir_all(cert_dir).is_err() {
+        return None;
+    }
+    // 用 PowerShell 生成自签名证书（SAN: 当前局域网 IP + 127.0.0.1 + localhost），导出 pfx
+    let ps = format!(
+        "New-SelfSignedCertificate -Subject 'CN={ip}' -TextExtension @('2.5.29.17={{text}}ipaddress={ip}&ipaddress=127.0.0.1&dns=localhost') -CertStoreLocation Cert:\\CurrentUser\\My -FriendlyName 'Dsh Forwarder' -NotAfter (Get-Date).AddYears(5) | Export-PfxCertificate -FilePath '{pfx}' -Password (ConvertTo-SecureString '{pass}' -AsPlainText -Force) -Force",
+        ip = current_ip, pfx = pfx.display(), pass = pass
+    );
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps])
+        .creation_flags(if cfg!(windows) { 0x0800_0000 } else { 0 })
+        .output();
+    match out {
+        Ok(o) if o.status.success() && pfx.exists() => Some((pfx, pass)),
+        _ => None,
+    }
+}
+
 /// 终止一个进程的整棵进程树（Windows taskkill /T /F）。
 fn kill_tree(mut child: Child) {
     let mut cmd = Command::new("taskkill");
@@ -262,7 +311,7 @@ impl Drop for DshManager {
 /// 内嵌的局域网转发器脚本（监听 8787，Host 重写后转发到 127.0.0.1:3080）。
 const FORWARDER_JS: &str = include_str!("../forwarder.cjs");
 
-/// 启动局域网转发器：让同一 WiFi 下的手机通过 http://<局域网IP>:8787 访问 dsh。
+/// 启动局域网转发器：让同一 WiFi 下的手机通过 https://<局域网IP>:8787 访问 dsh。
 fn spawn_forwarder(inner: &DshInner) -> Option<Child> {
     let path = std::env::temp_dir().join("dsh-forwarder.cjs");
     if std::fs::write(&path, FORWARDER_JS).is_err() {
@@ -270,6 +319,16 @@ fn spawn_forwarder(inner: &DshInner) -> Option<Child> {
     }
     let mut cmd = Command::new(&inner.node);
     cmd.arg(&path);
+    // 转发器日志写进 dsh.log，便于排查
+    if let Ok(f) = OpenOptions::new().create(true).append(true).open(&inner.log) {
+        cmd.stdout(Stdio::from(f.try_clone().expect("log clone")))
+            .stderr(Stdio::from(f));
+    }
+    // 提供 HTTPS 证书（生成或复用），使手机页面处于安全上下文
+    if let Some((pfx, pass)) = ensure_forwarder_cert(&inner.cert_dir) {
+        cmd.env("FORWARD_PFX", &pfx);
+        cmd.env("FORWARD_PFX_PASS", pass);
+    }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     #[cfg(windows)]
