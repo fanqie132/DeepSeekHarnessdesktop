@@ -28,4 +28,5 @@ semver = "1"
 zip = "0.6"
 tokio = { version = "1", features = ["rt", "macros"] }
 base64 = "0.22"
+winreg = "0.52"
 

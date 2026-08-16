@@ -84,9 +84,10 @@ fn spawn_dsh(inner: &DshInner) -> Child {
         .expect("failed to open dsh log file");
     let _ = writeln!(
         log_file,
-        "[dsh-desktop] starting: node={:?} entry={:?}",
+        "[dsh-desktop] starting: node={:?} entry={:?} GITHUB_TOKEN={}",
         inner.node,
-        inner.entry
+        inner.entry,
+        registry_has_github_token()
     );
     let stdout = log_file.try_clone().expect("failed to clone log handle");
     let mut cmd = Command::new(&inner.node);
@@ -96,7 +97,47 @@ fn spawn_dsh(inner: &DshInner) -> Child {
         .stderr(Stdio::from(log_file));
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(windows)]
+    merge_user_env(&mut cmd);
     cmd.spawn().expect("failed to start dsh web")
+}
+
+/// 把当前用户的注册表环境变量（HKCU\Environment）合并进子进程环境。
+/// 解决 `setx` 只写注册表、不改变已运行进程的问题：这样修改环境变量后，
+/// 无需注销/重启 Explorer，重启 dsh 服务器即生效。
+/// 注意：跳过 REG_EXPAND_SZ 类型（值含 %VAR% 未展开，如 TEMP/TMP），
+/// 避免把字面 `%USERPROFILE%` 注入导致 node 无法创建临时目录。
+#[cfg(windows)]
+fn merge_user_env(cmd: &mut Command) {
+    use winreg::enums::{HKEY_CURRENT_USER, RegType};
+    use winreg::RegKey;
+    if let Ok(env_key) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Environment") {
+        for item in env_key.enum_values() {
+            if let Ok((name, value)) = item {
+                if value.vtype == RegType::REG_EXPAND_SZ {
+                    continue; // 不展开 %VAR%，交给父进程已有的展开值
+                }
+                let s = value.to_string();
+                if !s.is_empty() {
+                    cmd.env(name, s);
+                }
+            }
+        }
+    }
+}
+
+/// 注册表里是否有 GITHUB_TOKEN（用于日志确认注入依据）。
+#[cfg(windows)]
+fn registry_has_github_token() -> &'static str {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    match RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Environment")
+        .and_then(|k| k.get_value::<String, _>("GITHUB_TOKEN"))
+    {
+        Ok(_) => "found-in-registry",
+        Err(_) => "not-found",
+    }
 }
 
 /// 终止一个进程的整棵进程树（Windows taskkill /T /F）。
