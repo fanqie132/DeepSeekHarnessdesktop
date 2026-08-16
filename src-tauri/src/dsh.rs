@@ -11,6 +11,61 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Windows Job Object：套壳进程无论以何种方式退出，Job 关闭时自动终止其内所有子进程，
+/// 彻底杜绝 dsh 服务残留孤儿进程（比 taskkill 更可靠）。
+#[cfg(windows)]
+struct KillOnCloseJob(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl KillOnCloseJob {
+    fn new() -> Option<Self> {
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::System::JobObjects::*;
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            Some(Self(job))
+        }
+    }
+
+    fn assign_pid(&self, pid: u32) {
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+        unsafe {
+            let handle = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+            if handle != INVALID_HANDLE_VALUE {
+                AssignProcessToJobObject(self.0, handle);
+                CloseHandle(handle);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for KillOnCloseJob {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// Job 句柄在线程间传递是安全的（关闭时机由 Drop 保证）。
+#[cfg(windows)]
+unsafe impl Send for KillOnCloseJob {}
+#[cfg(windows)]
+unsafe impl Sync for KillOnCloseJob {}
+
 /// 托管 dsh web 子进程生命周期，支持启停与重启。
 pub struct DshManager {
     inner: Mutex<DshInner>,
@@ -21,6 +76,8 @@ struct DshInner {
     node: PathBuf,
     entry: PathBuf,
     log: PathBuf,
+    #[cfg(windows)]
+    job: Option<KillOnCloseJob>,
 }
 
 impl DshManager {
@@ -32,6 +89,8 @@ impl DshManager {
                 node,
                 entry,
                 log,
+                #[cfg(windows)]
+                job: KillOnCloseJob::new(),
             }),
         }
     }
@@ -99,7 +158,12 @@ fn spawn_dsh(inner: &DshInner) -> Child {
     cmd.creation_flags(CREATE_NO_WINDOW);
     #[cfg(windows)]
     merge_user_env(&mut cmd);
-    cmd.spawn().expect("failed to start dsh web")
+    let child = cmd.spawn().expect("failed to start dsh web");
+    #[cfg(windows)]
+    if let Some(job) = &inner.job {
+        job.assign_pid(child.id());
+    }
+    child
 }
 
 /// 把当前用户的注册表环境变量（HKCU\Environment）合并进子进程环境。
