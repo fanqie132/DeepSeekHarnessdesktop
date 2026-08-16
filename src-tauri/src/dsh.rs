@@ -74,6 +74,7 @@ pub struct DshManager {
 
 struct DshInner {
     child: Option<Child>,
+    forwarder: Option<Child>,
     node: PathBuf,
     entry: PathBuf,
     log: PathBuf,
@@ -87,6 +88,7 @@ impl DshManager {
         Self {
             inner: Mutex::new(DshInner {
                 child: None,
+                forwarder: None,
                 node,
                 entry,
                 log,
@@ -102,7 +104,9 @@ impl DshManager {
             return;
         }
         let child = spawn_dsh(&inner);
+        let forwarder = spawn_forwarder(&inner);
         inner.child = Some(child);
+        inner.forwarder = forwarder;
     }
 
     /// 停止当前 dsh 进程树（更新/替换 runtime 前调用，释放文件锁）。
@@ -111,17 +115,26 @@ impl DshManager {
         if let Some(child) = inner.child.take() {
             kill_tree(child);
         }
+        if let Some(forwarder) = inner.forwarder.take() {
+            kill_tree(forwarder);
+        }
     }
 
     /// 让独立 taskkill 进程后台清理 dsh 进程树，不等待（用于托盘退出，界面立即关闭）。
     pub fn stop_detached(&self) {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(child) = inner.child.take() {
+        let mut spawn_kill = |pid: u32| {
             let mut cmd = Command::new("taskkill");
-            cmd.args(["/PID", &child.id().to_string(), "/T", "/F"]);
+            cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
             #[cfg(windows)]
             cmd.creation_flags(CREATE_NO_WINDOW);
             let _ = cmd.spawn();
+        };
+        if let Some(child) = inner.child.take() {
+            spawn_kill(child.id());
+        }
+        if let Some(forwarder) = inner.forwarder.take() {
+            spawn_kill(forwarder.id());
         }
     }
 
@@ -133,8 +146,13 @@ impl DshManager {
             kill_tree(child);
             wait_port_free(3080, Duration::from_secs(10));
         }
+        if let Some(forwarder) = inner.forwarder.take() {
+            kill_tree(forwarder);
+        }
         let child = spawn_dsh(&inner);
+        let forwarder = spawn_forwarder(&inner);
         inner.child = Some(child);
+        inner.forwarder = forwarder;
     }
 }
 
@@ -153,9 +171,9 @@ fn spawn_dsh(inner: &DshInner) -> Child {
     );
     let stdout = log_file.try_clone().expect("failed to clone log handle");
     let mut cmd = Command::new(&inner.node);
-    cmd.arg(&inner.entry)
-        .arg("web")
-        .stdout(Stdio::from(stdout))
+    // dsh 保持默认 127.0.0.1 绑定（dsh 出于安全拒绝 0.0.0.0）；局域网访问由 forwarder 转发
+    cmd.arg(&inner.entry).arg("web");
+    cmd.stdout(Stdio::from(stdout))
         .stderr(Stdio::from(log_file));
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -231,8 +249,35 @@ fn wait_port_free(port: u16, timeout: Duration) {
 
 impl Drop for DshManager {
     fn drop(&mut self) {
-        if let Some(child) = self.inner.lock().unwrap().child.take() {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(child) = inner.child.take() {
             kill_tree(child);
         }
+        if let Some(forwarder) = inner.forwarder.take() {
+            kill_tree(forwarder);
+        }
     }
+}
+
+/// 内嵌的局域网转发器脚本（监听 8787，Host 重写后转发到 127.0.0.1:3080）。
+const FORWARDER_JS: &str = include_str!("../forwarder.cjs");
+
+/// 启动局域网转发器：让同一 WiFi 下的手机通过 http://<局域网IP>:8787 访问 dsh。
+fn spawn_forwarder(inner: &DshInner) -> Option<Child> {
+    let path = std::env::temp_dir().join("dsh-forwarder.cjs");
+    if std::fs::write(&path, FORWARDER_JS).is_err() {
+        return None;
+    }
+    let mut cmd = Command::new(&inner.node);
+    cmd.arg(&path);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(windows)]
+    merge_user_env(&mut cmd);
+    let child = cmd.spawn().ok()?;
+    #[cfg(windows)]
+    if let Some(job) = &inner.job {
+        job.assign_pid(child.id());
+    }
+    Some(child)
 }
