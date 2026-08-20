@@ -128,19 +128,59 @@ pub fn fetch_and_replace_runtime(app: &AppHandle) -> Result<(), String> {
         return Err("下载内容缺少 dsh 运行时".into());
     }
 
-    // 原子替换：旧目录改名备份，新目录移入，失败回滚
+    // 原子替换：旧目录改名备份，新目录移入，失败回滚（带重试，应对文件占用）
     let backup = parent.join("runtime-old");
     if backup.exists() {
-        fs::remove_dir_all(&backup).map_err(|e| format!("清理备份失败：{e}"))?;
+        let _ = fs::remove_dir_all(&backup);
     }
     if rt.exists() {
-        fs::rename(&rt, &backup).map_err(|e| format!("备份旧运行时失败：{e}"))?;
+        let mut rename_ok = false;
+        let mut last_err = String::new();
+        for attempt in 1..=5 {
+            match fs::rename(&rt, &backup) {
+                Ok(()) => {
+                    rename_ok = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    // 等待占用释放，重试前再杀一次
+                    std::thread::sleep(std::time::Duration::from_millis(800 * attempt as u64));
+                    // 清理可能残留的 backup
+                    if backup.exists() {
+                        let _ = fs::remove_dir_all(&backup);
+                    }
+                }
+            }
+        }
+        if !rename_ok {
+            // 重试仍失败，尝试直接删除旧目录（绕开占用）
+            let _ = fs::remove_dir_all(&rt);
+            if rt.exists() {
+                return Err(format!("备份旧运行时失败：{}（已重试5次）", last_err));
+            }
+        }
     }
-    if let Err(e) = fs::rename(&staged_runtime, &rt) {
+    // 将新版移入
+    let mut move_ok = false;
+    let mut last_err = String::new();
+    for attempt in 1..=3 {
+        match fs::rename(&staged_runtime, &rt) {
+            Ok(()) => {
+                move_ok = true;
+                break;
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
+            }
+        }
+    }
+    if !move_ok {
         if backup.exists() {
             let _ = fs::rename(&backup, &rt);
         }
-        return Err(format!("替换运行时失败：{e}"));
+        return Err(format!("替换运行时失败：{}（已重试）", last_err));
     }
     if backup.exists() {
         let _ = fs::remove_dir_all(&backup);
