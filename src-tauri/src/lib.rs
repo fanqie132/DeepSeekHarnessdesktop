@@ -219,7 +219,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![save_image, save_image_data])
+        .invoke_handler(tauri::generate_handler![save_image, save_image_data, updater::do_update])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {

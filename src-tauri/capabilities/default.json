@@ -2,15 +2,22 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "updater"],
   "remote": {
     "urls": ["http://127.0.0.1:3080"]
   },
   "permissions": [
     "core:default",
+    "core:window:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen",
     "opener:default",
     "dialog:default",
     "allow-save-image",
-    "allow-save-image-data"
+    "allow-save-image-data",
+    "allow-do-update"
   ]
 }

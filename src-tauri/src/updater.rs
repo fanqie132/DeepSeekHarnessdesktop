@@ -3,8 +3,7 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use semver::Version;
-use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::dsh::DshManager;
 use crate::runtime;
@@ -15,8 +14,6 @@ const REGISTRY_URLS: &[&str] = &[
 ];
 const DSH_HOST: &str = "127.0.0.1";
 const DSH_PORT: u16 = 3080;
-const LABEL_RESTART: &str = "重启更新";
-const LABEL_LATER: &str = "稍后";
 
 /// 启动后延迟数秒，在后台检查 dsh 是否有新版本。
 pub fn spawn_check(app: AppHandle) {
@@ -36,7 +33,7 @@ pub fn spawn_check(app: AppHandle) {
             return;
         }
 
-        // 写更新日志（追加），便于排查“点更新没反应”
+        // 写更新日志（追加）
         {
             use std::io::Write;
             let ts = std::time::SystemTime::now()
@@ -49,88 +46,15 @@ pub fn spawn_check(app: AppHandle) {
                 .open(std::env::temp_dir().join("dsh-updater.log"))
                 .and_then(|mut f| writeln!(f, "[{}] check latest={} current={}", ts, latest, current));
         }
-        let app_for_dialog = app.clone();
-        app.dialog()
-            .message(format!(
-                "发现新版本 v{latest}（当前 v{current}）。\n点“重启更新”将下载约 70MB 并自动重启，期间请勿关闭窗口。"
-            ))
-            .title("DeepSeek Harness 更新")
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                LABEL_RESTART.to_string(),
-                LABEL_LATER.to_string(),
-            ))
-            .show(move |result| {
-                {
-                    use std::io::Write;
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(std::env::temp_dir().join("dsh-updater.log"))
-                        .and_then(|mut f| writeln!(f, "click result={}", result));
-                }
-                // 兼容：无论 true/false 都尝试更新（防止按钮映射颠倒）
-                if result {
-                    let app = app_for_dialog.clone();
-                    // 先弹“正在更新”提示
-                    let _ = app
-                        .dialog()
-                        .message("正在下载并更新运行环境（约 70MB），完成后将自动刷新页面，请稍候…")
-                        .title("正在更新")
-                        .show(|_| {});
-                    std::thread::spawn(move || {
-                        {
-                            use std::io::Write;
-                            let _ = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(std::env::temp_dir().join("dsh-updater.log"))
-                                .and_then(|mut f| writeln!(f, "start update_runtime"));
-                        }
-                        match update_runtime(&app) {
-                            Ok(()) => {
-                                {
-                                    use std::io::Write;
-                                    let _ = std::fs::OpenOptions::new()
-                                        .create(true)
-                                        .append(true)
-                                        .open(std::env::temp_dir().join("dsh-updater.log"))
-                                        .and_then(|mut f| writeln!(f, "update ok, reload"));
-                                }
-                                if let Ok(v) = read_local_version(&app) {
-                                    let _ = app.dialog().message(format!("更新完成，当前版本 v{v}，即将刷新页面")).title("更新完成").show(|_| {});
-                                }
-                                reload_after_ready(&app);
-                            }
-                            Err(e) => {
-                                {
-                                    use std::io::Write;
-                                    let _ = std::fs::OpenOptions::new()
-                                        .create(true)
-                                        .append(true)
-                                        .open(std::env::temp_dir().join("dsh-updater.log"))
-                                        .and_then(|mut f| writeln!(f, "update err: {}", e));
-                                }
-                                let _ = std::fs::write(
-                                    std::env::temp_dir().join("dsh-updater-update-error.log"),
-                                    &e,
-                                );
-                                let _ = app
-                                    .dialog()
-                                    .message(format!("更新失败：{e}"))
-                                    .title("更新失败")
-                                    .show(|_| {});
-                            }
-                        }
-                    });
-                } else {
-                    use std::io::Write;
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(std::env::temp_dir().join("dsh-updater.log"))
-                        .and_then(|mut f| writeln!(f, "click cancel, no update"));
-                }
-            });
+        // 独立更新窗口（白底蓝鲸鱼，420x340），替代系统弹窗
+        if let Err(e) = open_updater_window(&app, latest.clone(), current.clone()) {
+            use std::io::Write;
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(std::env::temp_dir().join("dsh-updater.log"))
+                .and_then(|mut f| writeln!(f, "open updater window failed: {}", e));
+        }
     });
 }
 
@@ -224,4 +148,95 @@ fn reload_after_ready(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.eval("window.location.reload()");
     }
+}
+
+fn open_updater_window(app: &AppHandle, latest: String, current: String) -> Result<(), String> {
+    // 已有则聚焦
+    if let Some(w) = app.get_webview_window("updater") {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let url = format!("updater.html?latest={}&current={}", latest, current);
+    let win = WebviewWindowBuilder::new(app, "updater", WebviewUrl::App(url.into()))
+        .title("DeepSeek Harness 更新")
+        .inner_size(420.0, 340.0)
+        .center()
+        .resizable(false)
+        .decorations(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    // 3秒后若前端未拉取参数，主动推送一次
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(800));
+        let _ = win.emit(
+            "updater-info",
+            serde_json::json!({ "latest": latest, "current": current }),
+        );
+        // 也确保主窗口能收到（调试）
+        let _ = app2.emit("updater-info", serde_json::json!({ "latest": latest, "current": current }));
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn do_update(app: AppHandle) -> Result<(), String> {
+    {
+        use std::io::Write;
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("dsh-updater.log"))
+            .and_then(|mut f| writeln!(f, "do_update invoked"));
+    }
+    // 完全退出式更新：先停服务，释放文件锁，再下载替换
+    if let Some(manager) = app.try_state::<DshManager>() {
+        manager.stop();
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    let result = (|| -> Result<(), String> {
+        let mut last_err = String::new();
+        for attempt in 1..=2 {
+            match runtime::fetch_and_replace_runtime(&app) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_err = e;
+                    if attempt == 1 {
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                }
+            }
+        }
+        Err(last_err)
+    })();
+
+    match &result {
+        Ok(()) => {
+            if let Some(manager) = app.try_state::<DshManager>() {
+                manager.start();
+            }
+            let _ = app.emit("updater-done", "更新完成，正在重启...");
+            // 2秒后刷新主窗口并关闭更新窗口
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                reload_after_ready(&app2);
+                std::thread::sleep(Duration::from_secs(2));
+                if let Some(w) = app2.get_webview_window("updater") {
+                    let _ = w.close();
+                }
+            });
+        }
+        Err(e) => {
+            let _ = app.emit("updater-error", e.clone());
+            let _ = std::fs::write(
+                std::env::temp_dir().join("dsh-updater-update-error.log"),
+                e,
+            );
+            // 失败也尝试拉起旧版，避免服务挂掉
+            if let Some(manager) = app.try_state::<DshManager>() {
+                manager.start();
+            }
+        }
+    }
+    result
 }
