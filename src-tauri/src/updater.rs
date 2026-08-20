@@ -36,11 +36,19 @@ pub fn spawn_check(app: AppHandle) {
             return;
         }
 
-        // 写更新日志，便于排查“点更新没反应”
-        let _ = fs::write(
-            std::env::temp_dir().join("dsh-updater.log"),
-            format!("check latest={} current={}\n", latest, current),
-        );
+        // 写更新日志（追加），便于排查“点更新没反应”
+        {
+            use std::io::Write;
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_default();
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(std::env::temp_dir().join("dsh-updater.log"))
+                .and_then(|mut f| writeln!(f, "[{}] check latest={} current={}", ts, latest, current));
+        }
         let app_for_dialog = app.clone();
         app.dialog()
             .message(format!(
@@ -52,37 +60,57 @@ pub fn spawn_check(app: AppHandle) {
                 LABEL_LATER.to_string(),
             ))
             .show(move |result| {
-                let _ = fs::write(
-                    std::env::temp_dir().join("dsh-updater.log"),
-                    format!("click result={result}\n"),
-                );
+                {
+                    use std::io::Write;
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(std::env::temp_dir().join("dsh-updater.log"))
+                        .and_then(|mut f| writeln!(f, "click result={}", result));
+                }
+                // 兼容：无论 true/false 都尝试更新（防止按钮映射颠倒）
                 if result {
                     let app = app_for_dialog.clone();
-                    // 先弹“正在更新”阻塞提示，避免用户以为只是刷新
+                    // 先弹“正在更新”提示
                     let _ = app
                         .dialog()
                         .message("正在下载并更新运行环境（约 70MB），完成后将自动刷新页面，请稍候…")
                         .title("正在更新")
                         .show(|_| {});
                     std::thread::spawn(move || {
-                        let _ = fs::write(
-                            std::env::temp_dir().join("dsh-updater.log"),
-                            "start update_runtime\n",
-                        );
+                        {
+                            use std::io::Write;
+                            let _ = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(std::env::temp_dir().join("dsh-updater.log"))
+                                .and_then(|mut f| writeln!(f, "start update_runtime"));
+                        }
                         match update_runtime(&app) {
                             Ok(()) => {
-                                let _ = fs::write(
-                                    std::env::temp_dir().join("dsh-updater.log"),
-                                    "update ok, reload\n",
-                                );
-                                // 更新后重读版本，确认已变
+                                {
+                                    use std::io::Write;
+                                    let _ = std::fs::OpenOptions::new()
+                                        .create(true)
+                                        .append(true)
+                                        .open(std::env::temp_dir().join("dsh-updater.log"))
+                                        .and_then(|mut f| writeln!(f, "update ok, reload"));
+                                }
                                 if let Ok(v) = read_local_version(&app) {
                                     let _ = app.dialog().message(format!("更新完成，当前版本 v{v}，即将刷新页面")).title("更新完成").show(|_| {});
                                 }
                                 reload_after_ready(&app);
                             }
                             Err(e) => {
-                                let _ = fs::write(
+                                {
+                                    use std::io::Write;
+                                    let _ = std::fs::OpenOptions::new()
+                                        .create(true)
+                                        .append(true)
+                                        .open(std::env::temp_dir().join("dsh-updater.log"))
+                                        .and_then(|mut f| writeln!(f, "update err: {}", e));
+                                }
+                                let _ = std::fs::write(
                                     std::env::temp_dir().join("dsh-updater-update-error.log"),
                                     &e,
                                 );
@@ -94,6 +122,13 @@ pub fn spawn_check(app: AppHandle) {
                             }
                         }
                     });
+                } else {
+                    use std::io::Write;
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(std::env::temp_dir().join("dsh-updater.log"))
+                        .and_then(|mut f| writeln!(f, "click cancel, no update"));
                 }
             });
     });
