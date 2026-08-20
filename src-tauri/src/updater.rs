@@ -36,10 +36,15 @@ pub fn spawn_check(app: AppHandle) {
             return;
         }
 
+        // 写更新日志，便于排查“点更新没反应”
+        let _ = fs::write(
+            std::env::temp_dir().join("dsh-updater.log"),
+            format!("check latest={} current={}\n", latest, current),
+        );
         let app_for_dialog = app.clone();
         app.dialog()
             .message(format!(
-                "发现新版本 v{latest}（当前 v{current}）。重启应用以更新？"
+                "发现新版本 v{latest}（当前 v{current}）。\n点“重启更新”将下载约 70MB 并自动重启，期间请勿关闭窗口。"
             ))
             .title("DeepSeek Harness 更新")
             .buttons(MessageDialogButtons::OkCancelCustom(
@@ -47,16 +52,46 @@ pub fn spawn_check(app: AppHandle) {
                 LABEL_LATER.to_string(),
             ))
             .show(move |result| {
+                let _ = fs::write(
+                    std::env::temp_dir().join("dsh-updater.log"),
+                    format!("click result={result}\n"),
+                );
                 if result {
                     let app = app_for_dialog.clone();
-                    std::thread::spawn(move || match update_runtime(&app) {
-                        Ok(()) => reload_after_ready(&app),
-                        Err(e) => {
-                            let _ = app
-                                .dialog()
-                                .message(format!("更新失败：{e}"))
-                                .title("更新失败")
-                                .show(|_| {});
+                    // 先弹“正在更新”阻塞提示，避免用户以为只是刷新
+                    let _ = app
+                        .dialog()
+                        .message("正在下载并更新运行环境（约 70MB），完成后将自动刷新页面，请稍候…")
+                        .title("正在更新")
+                        .show(|_| {});
+                    std::thread::spawn(move || {
+                        let _ = fs::write(
+                            std::env::temp_dir().join("dsh-updater.log"),
+                            "start update_runtime\n",
+                        );
+                        match update_runtime(&app) {
+                            Ok(()) => {
+                                let _ = fs::write(
+                                    std::env::temp_dir().join("dsh-updater.log"),
+                                    "update ok, reload\n",
+                                );
+                                // 更新后重读版本，确认已变
+                                if let Ok(v) = read_local_version(&app) {
+                                    let _ = app.dialog().message(format!("更新完成，当前版本 v{v}，即将刷新页面")).title("更新完成").show(|_| {});
+                                }
+                                reload_after_ready(&app);
+                            }
+                            Err(e) => {
+                                let _ = fs::write(
+                                    std::env::temp_dir().join("dsh-updater-update-error.log"),
+                                    &e,
+                                );
+                                let _ = app
+                                    .dialog()
+                                    .message(format!("更新失败：{e}"))
+                                    .title("更新失败")
+                                    .show(|_| {});
+                            }
                         }
                     });
                 }
