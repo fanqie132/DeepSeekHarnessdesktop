@@ -189,54 +189,66 @@ pub fn do_update(app: AppHandle) -> Result<(), String> {
             .open(std::env::temp_dir().join("dsh-updater.log"))
             .and_then(|mut f| writeln!(f, "do_update invoked"));
     }
-    // 完全退出式更新：先停服务，释放文件锁，再下载替换
-    if let Some(manager) = app.try_state::<DshManager>() {
-        manager.stop();
-        std::thread::sleep(Duration::from_secs(3));
+    // 立即隐藏主窗口，只留更新小窗，避免“主窗口还开着”的错觉
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
     }
-    let result = (|| -> Result<(), String> {
-        let mut last_err = String::new();
-        for attempt in 1..=2 {
-            match runtime::fetch_and_replace_runtime(&app) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    last_err = e;
-                    if attempt == 1 {
-                        std::thread::sleep(Duration::from_secs(2));
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        // 完全退出式：先停服务，释放文件锁
+        if let Some(manager) = app2.try_state::<DshManager>() {
+            manager.stop();
+            std::thread::sleep(Duration::from_secs(3));
+        }
+        let result = (|| -> Result<(), String> {
+            let mut last_err = String::new();
+            for attempt in 1..=2 {
+                match runtime::fetch_and_replace_runtime(&app2) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        last_err = e;
+                        if attempt == 1 {
+                            std::thread::sleep(Duration::from_secs(2));
+                        }
                     }
                 }
             }
-        }
-        Err(last_err)
-    })();
+            Err(last_err)
+        })();
 
-    match &result {
-        Ok(()) => {
-            if let Some(manager) = app.try_state::<DshManager>() {
-                manager.start();
-            }
-            let _ = app.emit("updater-done", "更新完成，正在重启...");
-            // 2秒后刷新主窗口并关闭更新窗口
-            let app2 = app.clone();
-            std::thread::spawn(move || {
+        match result {
+            Ok(()) => {
+                if let Some(manager) = app2.try_state::<DshManager>() {
+                    manager.start();
+                }
+                let _ = app2.emit("updater-done", "更新完成，正在重启...");
+                // 等服务就绪后，重新显示主窗口并关闭更新窗口
                 reload_after_ready(&app2);
-                std::thread::sleep(Duration::from_secs(2));
+                if let Some(w) = app2.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                    let _ = w.eval("window.location.reload()");
+                }
+                std::thread::sleep(Duration::from_secs(1));
                 if let Some(w) = app2.get_webview_window("updater") {
                     let _ = w.close();
                 }
-            });
-        }
-        Err(e) => {
-            let _ = app.emit("updater-error", e.clone());
-            let _ = std::fs::write(
-                std::env::temp_dir().join("dsh-updater-update-error.log"),
-                e,
-            );
-            // 失败也尝试拉起旧版，避免服务挂掉
-            if let Some(manager) = app.try_state::<DshManager>() {
-                manager.start();
+            }
+            Err(e) => {
+                let _ = app2.emit("updater-error", e.clone());
+                let _ = std::fs::write(
+                    std::env::temp_dir().join("dsh-updater-update-error.log"),
+                    &e,
+                );
+                // 失败也尝试拉起旧版，并把主窗口显示回来
+                if let Some(manager) = app2.try_state::<DshManager>() {
+                    manager.start();
+                }
+                if let Some(w) = app2.get_webview_window("main") {
+                    let _ = w.show();
+                }
             }
         }
-    }
-    result
+    });
+    Ok(())
 }
