@@ -151,16 +151,44 @@ pub fn fetch_and_replace_runtime(app: &AppHandle) -> Result<(), String> {
 }
 
 /// 用系统自带 curl.exe 下载（自动读取 HTTPS_PROXY 等系统代理环境变量）。
-/// 依赖 Windows 10 1803+ 内置的 curl。
+/// 依赖 Windows 10 1803+ 内置的 curl；失败时尝试 ureq 回退并输出详细错误。
 fn download_file(url: &str, dest: &Path) -> Result<(), String> {
+    // 优先 curl（走系统代理），失败则回退到 ureq
     let mut cmd = Command::new("curl");
     cmd.args(["-s", "-L", "--fail", "-o"]).arg(dest).arg(url);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let status = cmd.status().map_err(|e| format!("调用 curl 失败：{e}"))?;
-    if !status.success() {
-        return Err(format!("下载运行时失败（curl 退出码 {:?}）", status.code()));
+    match cmd.output() {
+        Ok(out) if out.status.success() => {
+            if dest.exists() && fs::metadata(dest).map(|m| m.len() > 1024).unwrap_or(false) {
+                return Ok(());
+            }
+            // curl 成功但文件异常，继续回退
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // 不直接返回，尝试 ureq 回退
+            let _ = fs::write(
+                std::env::temp_dir().join("dsh-runtime-download-curl.log"),
+                format!("curl fail code {:?} stdout:{stdout} stderr:{stderr}", out.status.code()),
+            );
+        }
+        Err(e) => {
+            let _ = fs::write(
+                std::env::temp_dir().join("dsh-runtime-download-curl.log"),
+                format!("curl spawn fail: {e}"),
+            );
+        }
     }
+    // ureq 回退（不依赖外部 curl）
+    let resp = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(120))
+        .call()
+        .map_err(|e| format!("下载失败（curl 与 ureq 均失败，最后 ureq: {e}）"))?;
+    let mut file = File::create(dest).map_err(|e| format!("创建下载文件失败：{e}"))?;
+    let mut reader = resp.into_reader();
+    std::io::copy(&mut reader, &mut file).map_err(|e| format!("写入下载文件失败：{e}"))?;
     Ok(())
 }
 

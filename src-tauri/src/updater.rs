@@ -111,12 +111,32 @@ fn compare_version(a: &str, b: &str) -> std::cmp::Ordering {
 fn update_runtime(app: &AppHandle) -> Result<(), String> {
     if let Some(manager) = app.try_state::<DshManager>() {
         manager.stop();
+        // 多等一会确保文件句柄释放（Windows 文件锁）
+        std::thread::sleep(Duration::from_secs(2));
     }
-    let result = runtime::fetch_and_replace_runtime(app);
+    // 重试一次下载（网络抖动）
+    let mut last_err = String::new();
+    for attempt in 1..=2 {
+        match runtime::fetch_and_replace_runtime(app) {
+            Ok(()) => {
+                if let Some(manager) = app.try_state::<DshManager>() {
+                    manager.start();
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                last_err = e;
+                if attempt == 1 {
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+            }
+        }
+    }
+    // 失败也尝试拉起旧版，避免服务挂掉
     if let Some(manager) = app.try_state::<DshManager>() {
         manager.start();
     }
-    result
+    Err(format!("{last_err}（已重试）\n日志：%LOCALAPPDATA%/com.dsh.desktop/dsh.log, %TEMP%/dsh-runtime-download-curl.log）"))
 }
 
 /// 等待 dsh 端口就绪后重载主窗口。
