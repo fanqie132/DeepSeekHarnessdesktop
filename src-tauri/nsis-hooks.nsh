@@ -5,6 +5,8 @@
   ; 结束应用主进程及其子进程树（含其拉起的 dsh 服务）
   nsExec::Exec 'taskkill /IM "dsh-desktop.exe" /T /F'
   Sleep 500
-  ; 删除首次启动下载解压的 runtime 目录
+  ; 删除首次启动下载解压的 runtime 目录（旧版在安装目录，新版在 AppData）
   RMDir /r "$INSTDIR\runtime"
+  RMDir /r "$LOCALAPPDATA\com.dsh.desktop\runtime"
+  RMDir /r "$APPDATA\com.dsh.desktop\runtime"
 !macroend

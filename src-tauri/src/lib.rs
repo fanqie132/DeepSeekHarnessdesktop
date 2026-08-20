@@ -118,6 +118,22 @@ fn runtime_base(app: &tauri::App) -> PathBuf {
     }
 }
 
+/// 可写数据目录（AppData/Local），用于 runtime/certs/logs，避免安装目录权限问题
+fn app_data_base(app: &tauri::AppHandle) -> PathBuf {
+    if cfg!(debug_assertions) {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri 应有父目录")
+            .to_path_buf()
+    } else {
+        strip_verbatim(
+            app.path()
+                .app_local_data_dir()
+                .unwrap_or_else(|_| app.path().resource_dir().expect("无法定位资源目录")),
+        )
+    }
+}
+
 /// node 可执行文件：开发期用系统 PATH 中的 node，发布期用捆绑的 node.exe。
 fn resolve_node(app: &tauri::App) -> PathBuf {
     if cfg!(debug_assertions) {
@@ -135,7 +151,7 @@ fn resolve_dsh_log(handle: &tauri::AppHandle) -> PathBuf {
             .expect("src-tauri 应有父目录")
             .join("dsh.log")
     } else {
-        strip_verbatim(handle.path().resource_dir().expect("无法定位资源目录")).join("dsh.log")
+        app_data_base(handle).join("dsh.log")
     }
 }
 
@@ -160,7 +176,7 @@ pub fn run() {
             let node = resolve_node(app);
             let entry = runtime::runtime_entry(&app.handle());
             let log = resolve_dsh_log(app.handle());
-            let cert_dir = runtime_base(app).join("certs");
+            let cert_dir = app_data_base(&app.handle()).join("certs");
             let manager = DshManager::new(node, entry, log, cert_dir);
             app.manage(manager);
 

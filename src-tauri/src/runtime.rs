@@ -15,7 +15,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const RUNTIME_URL: &str =
     "https://github.com/fanqie132/dsh-desktop/releases/download/runtime/runtime.zip";
 
-/// runtime 根目录：开发期用项目内 runtime，发布期用打包资源目录。
+/// runtime 根目录：开发期用项目内 runtime，发布期用可写的 AppData 目录（避免 Program Files 权限与占用问题）。
 pub fn runtime_dir(app: &AppHandle) -> PathBuf {
     if cfg!(debug_assertions) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -23,8 +23,58 @@ pub fn runtime_dir(app: &AppHandle) -> PathBuf {
             .expect("src-tauri 应有父目录")
             .join("runtime")
     } else {
+        // 优先使用 LocalAppData（可写、随用户），失败回退到 resource_dir
+        if let Ok(p) = app.path().app_local_data_dir() {
+            return crate::strip_verbatim(p).join("runtime");
+        }
         crate::strip_verbatim(app.path().resource_dir().expect("无法定位资源目录")).join("runtime")
     }
+}
+
+/// 旧版 runtime 位置（安装目录下），用于迁移
+fn legacy_runtime_dir(app: &AppHandle) -> Option<PathBuf> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    app.path()
+        .resource_dir()
+        .ok()
+        .map(|p| crate::strip_verbatim(p).join("runtime"))
+}
+
+/// 若新位置无 runtime 但旧位置有，自动迁移（原子 rename，同盘优先）
+fn try_migrate_legacy(app: &AppHandle) {
+    let new_rt = runtime_dir(app);
+    if new_rt.exists() {
+        return;
+    }
+    if let Some(old) = legacy_runtime_dir(app) {
+        if old.exists() && old != new_rt {
+            if let Some(parent) = new_rt.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            // 同盘 rename 最快，跨盘则回退为复制
+            if fs::rename(&old, &new_rt).is_err() {
+                let _ = copy_dir_all(&old, &new_rt);
+                let _ = fs::remove_dir_all(&old);
+            }
+        }
+    }
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dst_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst_path)?;
+        } else {
+            fs::copy(entry.path(), dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// dsh 的 bin.js 入口路径。
@@ -37,14 +87,16 @@ pub fn runtime_entry(app: &AppHandle) -> PathBuf {
         .join("bin.js")
 }
 
-/// runtime 是否已就绪（存在可运行的 dsh）。
+/// runtime 是否已就绪（存在可运行的 dsh），含旧版迁移
 pub fn is_ready(app: &AppHandle) -> bool {
+    try_migrate_legacy(app);
     runtime_entry(app).exists()
 }
 
 /// 下载最新 runtime.zip 并原子替换 runtime 目录（首次安装与更新共用）。
 /// 调用前应确保没有进程占用 runtime 内的文件。
 pub fn fetch_and_replace_runtime(app: &AppHandle) -> Result<(), String> {
+    try_migrate_legacy(app);
     let _ = app.emit(
         "runtime-progress",
         serde_json::json!({"stage": "download", "message": "正在下载运行时（约 76MB）..."}),
