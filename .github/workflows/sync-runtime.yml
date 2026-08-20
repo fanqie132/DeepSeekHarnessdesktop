@@ -1,0 +1,72 @@
+name: sync-runtime
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 每天 11:00 CST 检查
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: runtime/pnpm-lock.yaml
+
+      - name: check latest dsh
+        id: check
+        shell: pwsh
+        run: |
+          $latest = (Invoke-RestMethod -Uri "https://registry.npmjs.org/@deepseek-ai/dsh" -UseBasicParsing)."dist-tags".latest
+          $local = (Get-Content runtime/package.json | ConvertFrom-Json).dependencies."@deepseek-ai/dsh"
+          Write-Host "latest=$latest local=$local"
+          "latest=$latest" >> $env:GITHUB_OUTPUT
+          "local=$local" >> $env:GITHUB_OUTPUT
+          if ($latest -ne $local) { "need_update=true" >> $env:GITHUB_OUTPUT } else { "need_update=false" >> $env:GITHUB_OUTPUT }
+
+      - name: update runtime
+        if: steps.check.outputs.need_update == 'true'
+        shell: pwsh
+        run: |
+          pnpm --dir runtime up "@deepseek-ai/dsh@${{ steps.check.outputs.latest }}" --registry https://registry.npmjs.org
+          pnpm --dir runtime install --registry https://registry.npmjs.org
+
+      - name: build runtime.zip
+        if: steps.check.outputs.need_update == 'true'
+        shell: pwsh
+        run: |
+          $zip = "runtime.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path runtime -DestinationPath $zip -Force
+          Write-Host "runtime.zip size $((Get-Item $zip).Length)"
+
+      - name: upload to runtime release
+        if: steps.check.outputs.need_update == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "runtime"
+          $latest = "${{ steps.check.outputs.latest }}"
+          # 确保 runtime tag 存在
+          gh release view $tag 2>$null; if ($LASTEXITCODE -ne 0) { gh release create $tag --title "runtime" --notes "auto-synced runtime" }
+          gh release upload $tag runtime.zip --clobber
+          # 同步提交 runtime/package.json 变更
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add runtime/package.json runtime/pnpm-lock.yaml
+          git diff --staged --quiet; if ($LASTEXITCODE -ne 0) {
+            git commit -m "chore(runtime): sync dsh to $latest [auto]"
+            git push
+          }

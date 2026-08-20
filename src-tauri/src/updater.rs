@@ -9,7 +9,10 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use crate::dsh::DshManager;
 use crate::runtime;
 
-const REGISTRY_URL: &str = "https://registry.npmmirror.com/@deepseek-ai/dsh";
+const REGISTRY_URLS: &[&str] = &[
+  "https://registry.npmjs.org/@deepseek-ai/dsh",
+  "https://registry.npmmirror.com/@deepseek-ai/dsh",
+];
 const DSH_HOST: &str = "127.0.0.1";
 const DSH_PORT: u16 = 3080;
 const LABEL_RESTART: &str = "重启更新";
@@ -61,17 +64,26 @@ pub fn spawn_check(app: AppHandle) {
     });
 }
 
-/// 从 npm registry 读取 dist-tags.latest。
+/// 从 npm registry 读取 dist-tags.latest（主源失败自动切镜像）。
 fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error>> {
-    let body = ureq::get(REGISTRY_URL)
-        .timeout(Duration::from_secs(20))
-        .call()?
-        .into_string()?;
-    let json: serde_json::Value = serde_json::from_str(&body)?;
-    json["dist-tags"]["latest"]
-        .as_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| "registry 响应缺少 dist-tags.latest".into())
+    let mut last_err: Option<Box<dyn std::error::Error>> = None;
+    for url in REGISTRY_URLS {
+        match (|| -> Result<String, Box<dyn std::error::Error>> {
+            let body = ureq::get(*url)
+                .timeout(Duration::from_secs(15))
+                .call()?
+                .into_string()?;
+            let json: serde_json::Value = serde_json::from_str(&body)?;
+            json["dist-tags"]["latest"]
+                .as_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| "registry 响应缺少 dist-tags.latest".into())
+        })() {
+            Ok(v) => return Ok(v),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "registry 均不可用".into()))
 }
 
 /// 读取本地 runtime 中 dsh 的版本。
