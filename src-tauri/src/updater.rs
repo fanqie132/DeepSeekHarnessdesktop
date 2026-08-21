@@ -8,10 +8,11 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::dsh::DshManager;
 use crate::runtime;
 
-const REGISTRY_URLS: &[&str] = &[
-  "https://registry.npmjs.org/@deepseek-ai/dsh",
-  "https://registry.npmmirror.com/@deepseek-ai/dsh",
-];
+/// Release 资产的版本元数据（CI 同步时生成，几字节）。
+/// 客户端只认这个文件：它存在且更新意味着 runtime.zip 必定已就绪，
+/// 避免"盯 npm 弹窗、下载却是旧包"的时序错位。
+const RUNTIME_VERSION_URL: &str =
+    "https://github.com/fanqie132/dsh-desktop/releases/download/runtime/runtime-version.txt";
 const DSH_HOST: &str = "127.0.0.1";
 const DSH_PORT: u16 = 3080;
 
@@ -58,26 +59,17 @@ pub fn spawn_check(app: AppHandle) {
     });
 }
 
-/// 从 npm registry 读取 dist-tags.latest（主源失败自动切镜像）。
+/// 从 Release 资产读取可更新目标版本（CI 同步完成后才会变化）。
 fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error>> {
-    let mut last_err: Option<Box<dyn std::error::Error>> = None;
-    for url in REGISTRY_URLS {
-        match (|| -> Result<String, Box<dyn std::error::Error>> {
-            let body = ureq::get(*url)
-                .timeout(Duration::from_secs(15))
-                .call()?
-                .into_string()?;
-            let json: serde_json::Value = serde_json::from_str(&body)?;
-            json["dist-tags"]["latest"]
-                .as_str()
-                .map(|s| s.to_string())
-                .ok_or_else(|| "registry 响应缺少 dist-tags.latest".into())
-        })() {
-            Ok(v) => return Ok(v),
-            Err(e) => last_err = Some(e),
-        }
+    let body = ureq::get(RUNTIME_VERSION_URL)
+        .timeout(Duration::from_secs(15))
+        .call()?
+        .into_string()?;
+    let v = body.trim().to_string();
+    if v.is_empty() {
+        return Err("runtime-version.txt 内容为空".into());
     }
-    Err(last_err.unwrap_or_else(|| "registry 均不可用".into()))
+    Ok(v)
 }
 
 /// 读取本地 runtime 中 dsh 的版本。
