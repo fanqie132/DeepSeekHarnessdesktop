@@ -1,6 +1,13 @@
 use std::fs;
 use std::net::TcpStream;
+use std::process::Command;
 use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 use semver::Version;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -60,7 +67,22 @@ pub fn spawn_check(app: AppHandle) {
 }
 
 /// 从 Release 资产读取可更新目标版本（CI 同步完成后才会变化）。
+/// 优先系统 curl（自动继承 HTTP(S)_PROXY 代理环境变量，与 runtime.zip 下载同策略——
+/// github.com 在部分网络环境必须走代理，ureq 直连不通），失败回退 ureq 直连。
 fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error>> {
+    let mut cmd = Command::new("curl");
+    cmd.args(["-s", "-L", "--fail", "--max-time", "15", RUNTIME_VERSION_URL]);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(out) = cmd.output() {
+        if out.status.success() {
+            let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !v.is_empty() {
+                return Ok(v);
+            }
+        }
+    }
+    // 回退：ureq 直连（无代理但可直达 GitHub 的环境）
     let body = ureq::get(RUNTIME_VERSION_URL)
         .timeout(Duration::from_secs(15))
         .call()?
