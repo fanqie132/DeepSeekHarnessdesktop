@@ -49,8 +49,9 @@ jobs:
           # 版本元数据：客户端每次启动只拉这个几字节文件做更新检测，不下载大包
           Set-Content -Path runtime-version.txt -Value "${{ steps.check.outputs.latest }}" -Encoding ascii -NoNewline
           # tar 打包：快且无 260 字符路径限制（Compress-Archive 对深层 node_modules 会失败）
+          # CI 的 cwd 即仓库根，runtime 就在当前目录（README 里的 -C .. 写法仅适用于本地）
           if (Test-Path runtime.zip) { Remove-Item runtime.zip -Force }
-          tar -a -cf runtime.zip -C .. runtime
+          tar -a -cf runtime.zip runtime
           Write-Host "runtime.zip size $((Get-Item runtime.zip).Length)"
 
       - name: upload to runtime release
