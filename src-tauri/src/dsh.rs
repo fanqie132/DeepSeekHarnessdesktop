@@ -173,8 +173,9 @@ fn spawn_dsh(inner: &DshInner) -> Child {
     );
     let stdout = log_file.try_clone().expect("failed to clone log handle");
     let mut cmd = Command::new(&inner.node);
-    // dsh 保持默认 127.0.0.1 绑定（dsh 出于安全拒绝 0.0.0.0）；局域网访问由 forwarder 转发
-    cmd.arg(&inner.entry).arg("web");
+    // dsh 保持默认 127.0.0.1 绑定（dsh 出于安全拒绝 0.0.0.0）；局域网访问由 forwarder 转发。
+    // --no-open：阻止 dsh 自动用系统默认浏览器打开 UI（界面由本壳的 WebView 加载）
+    cmd.arg(&inner.entry).arg("web").arg("--no-open");
     cmd.stdout(Stdio::from(stdout))
         .stderr(Stdio::from(log_file));
     #[cfg(windows)]
