@@ -23,6 +23,21 @@ const RUNTIME_VERSION_URL: &str =
 const DSH_HOST: &str = "127.0.0.1";
 const DSH_PORT: u16 = 3080;
 
+/// 追加一行到 %TEMP%/dsh-updater.log（时间戳为 Unix 秒）。成功与失败都记录，
+/// 避免"静默假成功"无法排查。
+fn log_updater(msg: &str) {
+    use std::io::Write;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("dsh-updater.log"))
+        .and_then(|mut f| writeln!(f, "[{ts}] {msg}"));
+}
+
 /// 启动后延迟数秒，在后台检查 dsh 是否有新版本。
 pub fn spawn_check(app: AppHandle) {
     std::thread::spawn(move || {
@@ -30,38 +45,27 @@ pub fn spawn_check(app: AppHandle) {
 
         let latest = match fetch_latest_version() {
             Ok(v) => v,
-            Err(_) => return, // 网络不可用等：静默跳过本次检查
+            Err(e) => {
+                log_updater(&format!("check skipped: cannot fetch version.txt ({e})"));
+                return; // 网络不可用等：跳过本次检查（有日志可查）
+            }
         };
         let current = match read_local_version(&app) {
             Ok(v) => v,
-            Err(_) => return,
+            Err(e) => {
+                log_updater(&format!("check skipped: cannot read local version ({e})"));
+                return;
+            }
         };
 
         if compare_version(&latest, &current) != std::cmp::Ordering::Greater {
             return;
         }
 
-        // 写更新日志（追加）
-        {
-            use std::io::Write;
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs().to_string())
-                .unwrap_or_default();
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(std::env::temp_dir().join("dsh-updater.log"))
-                .and_then(|mut f| writeln!(f, "[{}] check latest={} current={}", ts, latest, current));
-        }
+        log_updater(&format!("check latest={latest} current={current}"));
         // 独立更新窗口（白底蓝鲸鱼，420x340），替代系统弹窗
         if let Err(e) = open_updater_window(&app, latest.clone(), current.clone()) {
-            use std::io::Write;
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(std::env::temp_dir().join("dsh-updater.log"))
-                .and_then(|mut f| writeln!(f, "open updater window failed: {}", e));
+            log_updater(&format!("open updater window failed: {e}"));
         }
     });
 }
@@ -162,21 +166,25 @@ fn open_updater_window(app: &AppHandle, latest: String, current: String) -> Resu
 }
 
 #[tauri::command]
-pub fn do_update(app: AppHandle) -> Result<(), String> {
-    {
-        use std::io::Write;
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(std::env::temp_dir().join("dsh-updater.log"))
-            .and_then(|mut f| writeln!(f, "do_update invoked"));
-    }
+pub fn do_update(app: AppHandle, target_version: Option<String>) -> Result<(), String> {
+    let before = read_local_version(&app)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "?".into());
+    log_updater(&format!(
+        "update start: v{before} -> {}",
+        target_version.as_deref().unwrap_or("?")
+    ));
     // 立即隐藏主窗口，只留更新小窗，避免“主窗口还开着”的错觉
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
     }
     let app2 = app.clone();
     std::thread::spawn(move || {
+        // 目标版本兜底：前端未传时自己拉一次 version.txt（供自检比对）
+        let target = target_version.or_else(|| fetch_latest_version().ok());
+        if target.is_none() {
+            log_updater("self-check degraded: no target version available");
+        }
         // 完全退出式：先停服务，释放文件锁
         if let Some(manager) = app2.try_state::<DshManager>() {
             manager.stop();
@@ -198,12 +206,38 @@ pub fn do_update(app: AppHandle) -> Result<(), String> {
             Err(last_err)
         })();
 
-        match result {
+        // 自检闭环：替换"成功"不等于更新成功——回读实际安装的版本，
+        // 低于目标版本说明下载到的资产过期，按失败处理而非静默
+        let outcome: Result<String, String> = match result {
             Ok(()) => {
+                let actual = read_local_version(&app2)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|_| "?".into());
+                let stale = matches!(&target,
+                    Some(t) if compare_version(&actual, t) == std::cmp::Ordering::Less);
+                if stale {
+                    Err(format!(
+                        "更新自检失败：期望 v{}，实际 v{}（下载到的资产已过期，请稍后重试）",
+                        target.as_deref().unwrap_or("?"),
+                        actual
+                    ))
+                } else {
+                    Ok(actual)
+                }
+            }
+            Err(e) => Err(e),
+        };
+
+        match outcome {
+            Ok(actual) => {
+                log_updater(&format!("update ok: v{before} -> v{actual} (self-check passed)"));
                 if let Some(manager) = app2.try_state::<DshManager>() {
                     manager.start();
                 }
-                let _ = app2.emit("updater-done", "更新完成，正在重启...");
+                let _ = app2.emit(
+                    "updater-done",
+                    format!("已从 v{before} 更新到 v{actual}，正在重启..."),
+                );
                 // 等服务就绪后，重新显示主窗口并关闭更新窗口
                 reload_after_ready(&app2);
                 if let Some(w) = app2.get_webview_window("main") {
@@ -217,8 +251,9 @@ pub fn do_update(app: AppHandle) -> Result<(), String> {
                 }
             }
             Err(e) => {
+                log_updater(&format!("update failed: {e}"));
                 let _ = app2.emit("updater-error", e.clone());
-                let _ = std::fs::write(
+                let _ = fs::write(
                     std::env::temp_dir().join("dsh-updater-update-error.log"),
                     &e,
                 );

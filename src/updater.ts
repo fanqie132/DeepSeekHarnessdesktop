@@ -111,7 +111,7 @@ async function init() {
     subtitleEl.textContent = "正在准备...";
     setProgress("开始下载", 5, "请稍候");
     try {
-      await invoke("do_update");
+      await invoke("do_update", { targetVersion: info?.latest ?? null });
     } catch (e) {
       errorEl.textContent = String(e);
       errorEl.style.display = "block";
