@@ -124,7 +124,8 @@ impl DshManager {
     }
 
     /// 开关局域网转发器（B3）：开启则拉起（含鉴权 token），关闭则终止进程。
-    /// 返回开启成功后的连接信息（地址 + token），关闭返回 None。
+    /// 已在运行时重复开启为幂等操作：直接返回现有连接信息（不报错）。
+    /// 成功返回 (地址基座, token)；关闭返回 None。
     pub fn set_forwarder(&self, enabled: bool) -> Option<(String, String)> {
         let mut inner = self.inner.lock().unwrap();
         if !enabled {
@@ -134,7 +135,10 @@ impl DshManager {
             return None;
         }
         if inner.forwarder.is_some() {
-            return None; // 已在运行
+            // 幂等：已在运行，直接给出连接信息（此前误报"开启失败"）
+            let ip = lan_ipv4()?.to_string();
+            let token = ensure_forwarder_token(&inner.cert_dir)?;
+            return Some((format!("https://{ip}:{}", inner.forward_port), token));
         }
         match spawn_forwarder(&inner) {
             Some(child) => {
