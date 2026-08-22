@@ -124,7 +124,7 @@ async function poll() {
 
 // 副文案：固定"正在启动"文案下方，每 4 秒随机轮换一句
 quoteEl.textContent = randomQuote();
-quoteTimer = setInterval(() => {
+quoteTimer = window.setInterval(() => {
   quoteEl.textContent = randomQuote();
 }, QUOTE_MS);
 
