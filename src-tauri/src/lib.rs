@@ -15,20 +15,16 @@ use tauri_plugin_dialog::DialogExt;
 const SOUND_JS: &str = include_str!("../sound.js");
 
 /// “图片另存为”：下载图片到内存，弹系统保存框，写入所选路径。
+/// 同步 command：Tauri 会放到专用线程执行，不阻塞 UI（无需 tokio）。
 #[tauri::command]
-async fn save_image(app: tauri::AppHandle, url: String) -> Result<Option<String>, String> {
-    let _ = log_dbg(&format!("save_image called: {url}"));
-    let bytes = tokio::task::spawn_blocking(move || download_bytes(&url))
-        .await
-        .map_err(|e| e.to_string())??;
-    let _ = log_dbg(&format!("downloaded {} bytes", bytes.len()));
+fn save_image(app: tauri::AppHandle, url: String) -> Result<Option<String>, String> {
+    let bytes = download_bytes(&url)?;
     let path = app
         .dialog()
         .file()
         .set_title("保存图片")
         .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "svg"])
         .blocking_save_file();
-    let _ = log_dbg(&format!("save dialog returned: {:?}", path.is_some()));
     if let Some(p) = path {
         let pbuf: PathBuf = p.into_path().map_err(|e| format!("路径无效：{e}"))?;
         fs::write(&pbuf, &bytes).map_err(|e| format!("写入文件失败：{e}"))?;
@@ -36,17 +32,6 @@ async fn save_image(app: tauri::AppHandle, url: String) -> Result<Option<String>
     } else {
         Ok(None) // 用户取消
     }
-}
-
-fn log_dbg(msg: &str) -> Result<(), String> {
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::env::temp_dir().join("dsh-saveimage.log"))
-    {
-        let _ = writeln!(f, "[{}] {msg}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
-    }
-    Ok(())
 }
 
 /// “图片另存为”（data URL 通道）：前端把图片转 base64 传入，弹系统保存框写入。

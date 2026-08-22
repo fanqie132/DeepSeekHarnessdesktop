@@ -17,7 +17,7 @@ fn show_main(app: &tauri::AppHandle) {
 }
 
 /// 等待 dsh 端口就绪后刷新主窗口（重启/更新完成后的统一收尾）。
-fn reload_when_ready(app: &AppHandle) {
+pub fn reload_when_ready(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(60);

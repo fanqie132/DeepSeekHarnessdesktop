@@ -20,7 +20,6 @@ struct KillOnCloseJob(windows_sys::Win32::Foundation::HANDLE);
 #[cfg(windows)]
 impl KillOnCloseJob {
     fn new() -> Option<Self> {
-        use windows_sys::Win32::Foundation::*;
         use windows_sys::Win32::System::JobObjects::*;
         unsafe {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
@@ -108,8 +107,7 @@ impl DshManager {
         if inner.child.is_some() {
             return;
         }
-        let child = spawn_dsh(&inner);
-        inner.child = Some(child);
+        inner.child = spawn_dsh(&inner);
     }
 
     /// 停止当前 dsh 进程树（更新/替换 runtime 前调用，释放文件锁）。
@@ -151,11 +149,6 @@ impl DshManager {
         }
     }
 
-    /// 转发器当前是否在运行。
-    pub fn forwarder_running(&self) -> bool {
-        self.inner.lock().unwrap().forwarder.is_some()
-    }
-
     /// 只读获取当前连接地址（转发器未运行时返回 None，零副作用）。
     pub fn connect_url(&self) -> Option<String> {
         let inner = self.inner.lock().unwrap();
@@ -170,7 +163,7 @@ impl DshManager {
     /// 让独立 taskkill 进程后台清理 dsh 进程树，不等待（用于托盘退出，界面立即关闭）。
     pub fn stop_detached(&self) {
         let mut inner = self.inner.lock().unwrap();
-        let mut spawn_kill = |pid: u32| {
+        let spawn_kill = |pid: u32| {
             let mut cmd = Command::new("taskkill");
             cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
             #[cfg(windows)]
@@ -187,48 +180,54 @@ impl DshManager {
 
     /// 停止当前 dsh 进程树并重新启动（更新/插件生效后调用）。
     /// 完全结束旧进程（含子进程），等待端口释放后再启动新进程。
-    /// 注意：转发器不在此自动重启，由托盘开关状态决定。
+    /// 注意：端口等待在锁外进行，避免长时间持锁阻塞其他启停调用；
+    /// 转发器不在此自动重启，由托盘开关状态决定。
     pub fn restart(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(child) = inner.child.take() {
+        // 第一段：锁内取走句柄并杀树，锁随即释放
+        let killed = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.child.take()
+        };
+        if let Some(child) = killed {
             kill_tree(child);
             wait_port_free(3080, Duration::from_secs(10));
         }
-        let child = spawn_dsh(&inner);
-        inner.child = Some(child);
+        // 第二段：重新加锁启动
+        let mut inner = self.inner.lock().unwrap();
+        inner.child = spawn_dsh(&inner);
     }
 }
 
-fn spawn_dsh(inner: &DshInner) -> Child {
+fn spawn_dsh(inner: &DshInner) -> Option<Child> {
     let mut log_file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&inner.log)
-        .expect("failed to open dsh log file");
-    let _ = writeln!(
+        .ok()?;
+    writeln!(
         log_file,
         "[dsh-desktop] starting: node={:?} entry={:?} GITHUB_TOKEN={}",
         inner.node,
         inner.entry,
         registry_has_github_token()
-    );
-    let stdout = log_file.try_clone().expect("failed to clone log handle");
+    )
+    .ok()?;
+    let stdout = log_file.try_clone().ok()?;
     let mut cmd = Command::new(&inner.node);
     // dsh 保持默认 127.0.0.1 绑定（dsh 出于安全拒绝 0.0.0.0）；局域网访问由 forwarder 转发。
     // --no-open：阻止 dsh 自动用系统默认浏览器打开 UI（界面由本壳的 WebView 加载）
     cmd.arg(&inner.entry).arg("web").arg("--no-open");
-    cmd.stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(log_file));
+    cmd.stdout(Stdio::from(stdout)).stderr(Stdio::from(log_file));
     #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    #[cfg(windows)]
-    merge_user_env(&mut cmd);
-    let child = cmd.spawn().expect("failed to start dsh web");
-    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        merge_user_env(&mut cmd);
+    }
+    let child = cmd.spawn().ok()?;    #[cfg(windows)]
     if let Some(job) = &inner.job {
         job.assign_pid(child.id());
     }
-    child
+    Some(child)
 }
 
 /// 把当前用户的注册表环境变量（HKCU\Environment）合并进子进程环境。
@@ -409,8 +408,9 @@ fn spawn_forwarder(inner: &DshInner) -> Option<Child> {
     cmd.arg(&path);
     // 转发器日志写进 dsh.log，便于排查
     if let Ok(f) = OpenOptions::new().create(true).append(true).open(&inner.log) {
-        cmd.stdout(Stdio::from(f.try_clone().expect("log clone")))
-            .stderr(Stdio::from(f));
+        if let Ok(out) = f.try_clone() {
+            cmd.stdout(Stdio::from(out)).stderr(Stdio::from(f));
+        }
     }
     cmd.env("FORWARD_PFX", &pfx);
     cmd.env("FORWARD_PFX_PASS", pass);

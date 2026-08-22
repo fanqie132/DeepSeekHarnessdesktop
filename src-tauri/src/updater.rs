@@ -1,7 +1,6 @@
 use std::fs;
-use std::net::TcpStream;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -20,8 +19,6 @@ use crate::runtime;
 /// 避免"盯 npm 弹窗、下载却是旧包"的时序错位。
 const RUNTIME_VERSION_URL: &str =
     "https://github.com/fanqie132/dsh-desktop/releases/download/runtime/runtime-version.txt";
-const DSH_HOST: &str = "127.0.0.1";
-const DSH_PORT: u16 = 3080;
 
 /// 追加一行到 %TEMP%/dsh-updater.log（时间戳为 Unix 秒）。成功与失败都记录，
 /// 避免"静默假成功"无法排查。
@@ -116,23 +113,6 @@ fn compare_version(a: &str, b: &str) -> std::cmp::Ordering {
     match (Version::parse(a), Version::parse(b)) {
         (Ok(va), Ok(vb)) => va.cmp(&vb),
         _ => a.cmp(b),
-    }
-}
-
-/// 等待 dsh 端口就绪后重载主窗口。
-fn reload_after_ready(app: &AppHandle) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        if TcpStream::connect((DSH_HOST, DSH_PORT)).is_ok() {
-            break;
-        }
-        if Instant::now() > deadline {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval("window.location.reload()");
     }
 }
 
@@ -240,7 +220,7 @@ pub fn do_update(app: AppHandle, target_version: Option<String>) -> Result<(), S
                     format!("已从 v{before} 更新到 v{actual}，正在重启..."),
                 );
                 // 等服务就绪后，重新显示主窗口并关闭更新窗口
-                reload_after_ready(&app2);
+                crate::tray::reload_when_ready(&app2);
                 if let Some(w) = app2.get_webview_window("main") {
                     let _ = w.show();
                     let _ = w.set_focus();
@@ -254,10 +234,6 @@ pub fn do_update(app: AppHandle, target_version: Option<String>) -> Result<(), S
             Err(e) => {
                 log_updater(&format!("update failed: {e}"));
                 let _ = app2.emit("updater-error", e.clone());
-                let _ = fs::write(
-                    std::env::temp_dir().join("dsh-updater-update-error.log"),
-                    &e,
-                );
                 // 失败也尝试拉起旧版，并把主窗口显示回来
                 if let Some(manager) = app2.try_state::<DshManager>() {
                     manager.start();

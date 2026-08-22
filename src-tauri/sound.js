@@ -81,6 +81,8 @@
   } catch (e) {}
 
   // ---- 完成检测：轮询 session.list，running 翻转 + goal 完成 ----
+  // 频率 3s（平衡提示及时性与常驻开销）；localStorage 设 dshSound=off 可整体关闭
+  var pollEnabled = localStorage.getItem("dshSound") !== "off";
   var runningState = {};
   var goalPhase = {};
   var completedGoal = {};
@@ -124,7 +126,9 @@
       goalPhase[id] = phase;
     });
   }
-  setInterval(function () {
-    fetchSessions().then(onSessions);
-  }, 1000);
+  if (pollEnabled) {
+    setInterval(function () {
+      fetchSessions().then(onSessions);
+    }, 3000);
+  }
 })();
