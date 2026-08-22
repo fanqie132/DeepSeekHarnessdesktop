@@ -16,7 +16,6 @@ export default defineConfig(async () => ({
         main: "index.html",
         updater: "updater.html",
         connect: "connect.html",
-        traymenu: "traymenu.html",
       },
     },
   },
