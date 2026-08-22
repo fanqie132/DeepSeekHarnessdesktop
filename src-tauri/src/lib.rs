@@ -14,6 +14,19 @@ use tauri_plugin_dialog::DialogExt;
 /// 审批/提问提示音脚本（aria-modal 弹窗边沿检测，注入 dsh 页面）。
 const SOUND_JS: &str = include_str!("../sound.js");
 
+/// 解除 Windows 前台锁定：注入一次 Alt 按下/抬起，让系统认为存在键盘交互，
+/// 从而允许随后的 set_focus 抢占前台（否则长时间后台的进程会被静默拒绝，
+/// 降级为任务栏闪烁）。业界通用做法（Chrome 安装器等）。
+#[cfg(windows)]
+fn unlock_foreground() {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_MENU};
+    const KEYEVENTF_KEYUP: u32 = 0x0002;
+    unsafe {
+        keybd_event(VK_MENU as u8, 0, 0, 0);
+        keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+    }
+}
+
 /// “图片另存为”：下载图片到内存，弹系统保存框，写入所选路径。
 /// 同步 command：Tauri 会放到专用线程执行，不阻塞 UI（无需 tokio）。
 #[tauri::command]
@@ -168,6 +181,9 @@ pub fn run() {
                     let win = webview.window();
                     let _ = win.show();
                     let _ = win.unminimize();
+                    // 长时间后台后前台授权已过期，先解锁再置前
+                    #[cfg(windows)]
+                    unlock_foreground();
                     let _ = win.set_focus();
                 }
                 if std::env::var("DSH_DEBUG_PAGELOAD").is_ok() {
