@@ -49,7 +49,7 @@ fn open_connect_window(app: &tauri::AppHandle, url: &str) -> Result<(), String> 
             tauri::WebviewUrl::App("connect.html".into()),
         )
         .title("手机连接 - DeepSeek Harness")
-        .inner_size(380.0, 520.0)
+        .inner_size(360.0, 470.0)
         .center()
         .resizable(false)
         .decorations(true)

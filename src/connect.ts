@@ -19,7 +19,7 @@ async function apply(info: ConnectInfo) {
   try {
     // toDataURL 直接产出图片数据，避开 canvas 元素类型坑
     const dataUrl = await QRCode.toDataURL(info.url, {
-      width: 432, // 2x 输出，页面显示 216px 保持锐利
+      width: 352, // 2x 输出，页面显示约 176px 保持锐利
       margin: 0,
       errorCorrectionLevel: "M",
       color: { dark: "#111827", light: "#ffffff" },
