@@ -15,6 +15,7 @@ export default defineConfig(async () => ({
       input: {
         main: "index.html",
         updater: "updater.html",
+        connect: "connect.html",
       },
     },
   },

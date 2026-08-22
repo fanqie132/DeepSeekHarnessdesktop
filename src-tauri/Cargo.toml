@@ -37,4 +37,5 @@ windows-sys = { version = "0.59", features = [
 ] }
 if-addrs = "0.13"
 rand = "0.8"
+qrcodegen = "1.8"
 

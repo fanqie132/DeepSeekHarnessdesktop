@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>手机连接 - DeepSeek Harness</title>
+    <script type="module" src="/src/connect.ts" defer></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        background: #ffffff;
+        color: #1f2937;
+        font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        overflow: hidden;
+        user-select: none;
+      }
+      #connect { text-align: center; width: 340px; padding: 20px; }
+      #whale {
+        width: 44px; height: 44px; margin: 0 auto 8px;
+        animation: swim 3s ease-in-out infinite;
+      }
+      #whale img { width: 100%; height: 100%; }
+      @keyframes swim { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+      #title { font-size: 16px; font-weight: 600; color: #1f2937; }
+      #subtitle { margin-top: 6px; font-size: 12px; color: #6b7280; line-height: 18px; }
+      #qr-wrap {
+        width: 240px; height: 240px; margin: 18px auto;
+        padding: 12px; background: #fff;
+        border: 1px solid #e5e7eb; border-radius: 14px;
+        box-shadow: 0 2px 10px rgba(0,0,0,.06);
+      }
+      #qr-wrap svg, #qr-wrap img { width: 100%; height: 100%; display: block; }
+      #addr-row {
+        display: flex; align-items: center; gap: 8px;
+        max-width: 320px; margin: 0 auto;
+      }
+      #addr {
+        flex: 1; text-align: left;
+        font-family: Consolas, monospace; font-size: 11px;
+        color: #4b5563; background: #f9fafb;
+        border: 1px solid #e5e7eb; border-radius: 8px;
+        padding: 7px 9px; user-select: text;
+        overflow-wrap: anywhere; max-height: 48px; overflow-y: auto;
+      }
+      #btn-copy {
+        flex-shrink: 0; height: 32px; padding: 0 12px;
+        border-radius: 16px; border: none; cursor: pointer;
+        font-size: 12px; font-weight: 500;
+        background: #4176e6; color: #fff;
+      }
+      #btn-copy:hover { background: #365fcc; }
+      #btn-copy.copied { background: #10b981; }
+      #hint { margin-top: 14px; font-size: 11px; color: #9ca3af; line-height: 17px; }
+      #error {
+        margin-top: 16px; font-size: 12px; color: #ef4444;
+        background: #fef2f2; border-radius: 8px; padding: 10px;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="connect">
+      <div id="whale"><img src="/whale.svg" alt="whale" /></div>
+      <p id="title">手机扫码连接</p>
+      <p id="subtitle">同一 WiFi 下，用手机浏览器扫码即可打开 DeepSeek Harness</p>
+      <div id="qr-wrap"><div id="qr"><p id="loading-qr" style="padding-top:100px;font-size:12px;color:#9ca3af;">正在生成二维码...</p></div></div>
+      <div id="addr-row">
+        <div id="addr">等待连接信息...</div>
+        <button id="btn-copy">复制地址</button>
+      </div>
+      <p id="hint">首次访问需信任自签名证书；电脑 IP 变化后会自动重签并更新此码</p>
+      <div id="error"></div>
+    </div>
+  </body>
+</html>
