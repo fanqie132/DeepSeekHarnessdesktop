@@ -139,11 +139,16 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "show" => show_main(app),
             "restart" => {
-                // 完全结束旧进程（含子进程）后启动新进程，插件/环境变量随新进程生效
+                // 即时反馈：先切回本地 loading 页（鲸鱼动画 + 轮询就绪后自动跳回官方 UI），
+                // 再后台执行杀树/等端口/拉起，避免主窗口停留在静止旧画面无任何反馈
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.navigate(
+                        tauri::WebviewUrl::App("index.html?restart=1".into()).into(),
+                    );
+                }
                 if let Some(manager) = app.try_state::<DshManager>() {
                     manager.restart();
                 }
-                reload_when_ready(app);
             }
             "lan" => {
                 // MenuEvent 不携带勾选态：以持久化配置为准取反，再回写菜单显示

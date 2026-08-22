@@ -4,6 +4,14 @@ const DSH_URL = "http://127.0.0.1:3080";
 const POLL_INTERVAL_MS = 500;
 const MAX_ATTEMPTS = 600;
 
+// 场景区分：托盘"重启服务"会带 ?restart=1 导航回本页
+const isRestart = new URLSearchParams(window.location.search).has("restart");
+const TEXT_STARTING = isRestart ? "正在重启服务..." : "正在启动 DeepSeek Harness...";
+const TEXT_TIMEOUT = (sec: number) =>
+  isRestart
+    ? `重启超时（${sec}s）。请检查后重新启动应用。`
+    : `启动超时（${sec}s）。请检查后重新启动应用。`;
+
 const statusEl = document.getElementById("status") as HTMLElement;
 const quoteEl = document.getElementById("quote") as HTMLElement;
 const progressWrapEl = document.getElementById("progress-wrap") as HTMLElement;
@@ -113,11 +121,11 @@ async function poll() {
     return;
   }
   if (attempts >= MAX_ATTEMPTS) {
-    fail(`启动超时（${Math.round((attempts * POLL_INTERVAL_MS) / 1000)}s）。请检查后重新启动应用。`);
+    fail(TEXT_TIMEOUT(Math.round((attempts * POLL_INTERVAL_MS) / 1000)));
     return;
   }
   if (progressWrapEl.style.display === "none") {
-    statusEl.textContent = "正在启动 DeepSeek Harness...";
+    statusEl.textContent = TEXT_STARTING;
   }
   setTimeout(poll, POLL_INTERVAL_MS);
 }
