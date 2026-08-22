@@ -145,10 +145,10 @@ fn open_updater_window(app: &AppHandle, latest: String, current: String) -> Resu
     let url = format!("updater.html?latest={}&current={}", latest, current);
     let win = WebviewWindowBuilder::new(app, "updater", WebviewUrl::App(url.into()))
         .title("DeepSeek Harness 更新")
-        .inner_size(420.0, 340.0)
+        .inner_size(420.0, 380.0)
         .center()
         .resizable(false)
-        .decorations(true)
+        .decorations(false)
         .build()
         .map_err(|e| e.to_string())?;
     // 3秒后若前端未拉取参数，主动推送一次

@@ -1,4 +1,5 @@
 import QRCode from "qrcode";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 
 interface ConnectInfo {
@@ -8,10 +9,12 @@ interface ConnectInfo {
 const qrEl = document.getElementById("qr") as HTMLElement;
 const addrEl = document.getElementById("addr") as HTMLElement;
 const copyBtn = document.getElementById("btn-copy") as HTMLButtonElement;
-const errorEl = document.getElementById("error") as HTMLElement;
+
+document.getElementById("btn-close")?.addEventListener("click", () => {
+  void getCurrentWindow().close();
+});
 
 async function apply(info: ConnectInfo) {
-  errorEl.style.display = "none";
   addrEl.textContent = info.url;
   try {
     // toDataURL 直接产出图片数据，避开 canvas 元素类型坑
@@ -42,10 +45,4 @@ async function apply(info: ConnectInfo) {
 
 void listen<ConnectInfo>("connect-info", (e) => {
   void apply(e.payload);
-});
-
-void listen<string>("connect-error", (e) => {
-  qrEl.innerHTML = "";
-  errorEl.textContent = e.payload;
-  errorEl.style.display = "block";
 });

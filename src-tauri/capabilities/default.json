@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "主窗口（含加载远程 dsh 页面时）的最小权限：仅图片另存为与事件监听",
-  "windows": ["main", "connect"],
+  "windows": ["main", "connect", "traymenu"],
   "remote": {
     "urls": ["http://127.0.0.1:3080"]
   },
@@ -10,8 +10,10 @@
     "core:default",
     "core:event:default",
     "core:event:allow-listen",
+    "core:window:allow-close",
     "opener:default",
     "allow-save-image",
-    "allow-save-image-data"
+    "allow-save-image-data",
+    "allow-tray-menu-action"
   ]
 }

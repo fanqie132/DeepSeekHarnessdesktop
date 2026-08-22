@@ -9,18 +9,30 @@
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body {
         display: flex;
-        align-items: center;
-        justify-content: center;
-        height: 100vh;
+        flex-direction: column;
         background: #ffffff;
         color: #1f2937;
         font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        height: 100vh;
         overflow: hidden;
         user-select: none;
       }
-      #connect { text-align: center; width: 340px; padding: 20px; }
+      /* 自绘标题栏：可拖拽 + 关闭按钮 */
+      .titlebar {
+        display: flex; justify-content: space-between; align-items: center;
+        height: 36px; padding-left: 14px; flex-shrink: 0;
+      }
+      .titlebar-title { font-size: 12px; color: #6b7280; }
+      #btn-close {
+        width: 46px; height: 36px; border: none; background: transparent;
+        font-size: 15px; color: #6b7280; cursor: pointer; line-height: 1;
+      }
+      #btn-close:hover { background: #ef4444; color: #fff; }
+      #content {
+        flex: 1; text-align: center; width: 340px; margin: 0 auto; overflow-y: auto;
+      }
       #whale {
-        width: 44px; height: 44px; margin: 0 auto 8px;
+        width: 44px; height: 44px; margin: 4px auto 8px;
         animation: swim 3s ease-in-out infinite;
       }
       #whale img { width: 100%; height: 100%; }
@@ -28,7 +40,7 @@
       #title { font-size: 16px; font-weight: 600; color: #1f2937; }
       #subtitle { margin-top: 6px; font-size: 12px; color: #6b7280; line-height: 18px; }
       #qr-wrap {
-        width: 240px; height: 240px; margin: 18px auto;
+        width: 240px; height: 240px; margin: 14px auto;
         padding: 12px; background: #fff;
         border: 1px solid #e5e7eb; border-radius: 14px;
         box-shadow: 0 2px 10px rgba(0,0,0,.06);
@@ -54,20 +66,19 @@
       }
       #btn-copy:hover { background: #365fcc; }
       #btn-copy.copied { background: #10b981; }
-      #hint { margin-top: 14px; font-size: 11px; color: #9ca3af; line-height: 17px; }
-      #error {
-        margin-top: 16px; font-size: 12px; color: #ef4444;
-        background: #fef2f2; border-radius: 8px; padding: 10px;
-        display: none;
-      }
+      #hint { margin-top: 12px; font-size: 11px; color: #9ca3af; line-height: 17px; }
     </style>
   </head>
   <body>
-    <div id="connect">
+    <div class="titlebar" data-tauri-drag-region>
+      <span class="titlebar-title">手机连接 - DeepSeek Harness</span>
+      <button id="btn-close" title="关闭">✕</button>
+    </div>
+    <div id="content">
       <div id="whale"><img src="/whale.svg" alt="whale" /></div>
       <p id="title">手机扫码连接</p>
       <p id="subtitle">同一 WiFi 下，用手机浏览器扫码即可打开 DeepSeek Harness</p>
-      <div id="qr-wrap"><div id="qr"><p id="loading-qr" style="padding-top:100px;font-size:12px;color:#9ca3af;">正在生成二维码...</p></div></div>
+      <div id="qr-wrap"><div id="qr"><p style="padding-top:100px;font-size:12px;color:#9ca3af;">正在生成二维码...</p></div></div>
       <div id="addr-row">
         <div id="addr">等待连接信息...</div>
         <button id="btn-copy">复制地址</button>
@@ -77,7 +88,6 @@
         <b>高级</b> → <b>继续前往</b>（自签名证书的正常提示，仅需一次）；
         若打不开请确认手机与本电脑在同一 WiFi，且手机 VPN 已关闭
       </p>
-      <div id="error"></div>
     </div>
   </body>
 </html>
