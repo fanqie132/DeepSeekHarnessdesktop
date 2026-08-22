@@ -177,10 +177,22 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
-                if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(
-                    std::env::temp_dir().join("dsh-pageload.log"),
-                ) {
-                    let _ = writeln!(f, "page finished: {}", payload.url());
+                let url = payload.url().to_string();
+                // dsh UI 就绪：把主窗口带回前台（用户等待期间可能切去了别的应用）
+                if webview.label() == "main" && url.starts_with("http://127.0.0.1:3080") {
+                    let win = webview.window();
+                    let _ = win.show();
+                    let _ = win.unminimize();
+                    let _ = win.set_focus();
+                }
+                if std::env::var("DSH_DEBUG_PAGELOAD").is_ok() {
+                    if let Ok(mut f) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(std::env::temp_dir().join("dsh-pageload.log"))
+                    {
+                        let _ = writeln!(f, "page finished: {url}");
+                    }
                 }
                 let _ = webview.eval(CONTEXT_MENU_JS);
                 // 审批/提问提示音（aria-modal 弹窗出现时）
