@@ -52,6 +52,8 @@ fn open_connect_window(app: &tauri::AppHandle, url: &str) -> Result<(), String> 
         .inner_size(360.0, 470.0)
         .center()
         .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
         .decorations(true)
         .build()
         .map_err(|e| e.to_string())?;

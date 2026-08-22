@@ -148,7 +148,8 @@ fn open_updater_window(app: &AppHandle, latest: String, current: String) -> Resu
         .inner_size(420.0, 380.0)
         .center()
         .resizable(false)
-        .decorations(false)
+        .maximizable(false)
+        .minimizable(false)
         .build()
         .map_err(|e| e.to_string())?;
     // 3秒后若前端未拉取参数，主动推送一次

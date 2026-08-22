@@ -1,5 +1,4 @@
 import QRCode from "qrcode";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 
 interface ConnectInfo {
@@ -9,10 +8,6 @@ interface ConnectInfo {
 const qrEl = document.getElementById("qr") as HTMLElement;
 const addrEl = document.getElementById("addr") as HTMLElement;
 const copyBtn = document.getElementById("btn-copy") as HTMLButtonElement;
-
-document.getElementById("btn-close")?.addEventListener("click", () => {
-  void getCurrentWindow().close();
-});
 
 async function apply(info: ConnectInfo) {
   addrEl.textContent = info.url;

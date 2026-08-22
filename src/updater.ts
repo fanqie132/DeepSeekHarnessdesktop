@@ -2,10 +2,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
-document.getElementById("btn-close")?.addEventListener("click", () => {
-  void getCurrentWindow().close();
-});
-
 const titleEl = document.getElementById("title") as HTMLElement;
 const subtitleEl = document.getElementById("subtitle") as HTMLElement;
 const fillEl = document.getElementById("progress-fill") as HTMLElement;
