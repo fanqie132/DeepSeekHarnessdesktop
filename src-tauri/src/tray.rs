@@ -142,9 +142,13 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
                 // 即时反馈：先切回本地 loading 页（鲸鱼动画 + 轮询就绪后自动跳回官方 UI），
                 // 再后台执行杀树/等端口/拉起，避免主窗口停留在静止旧画面无任何反馈
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.navigate(
-                        tauri::WebviewUrl::App("index.html?restart=1".into()).into(),
-                    );
+                    // 从 3080 远程页面跨域跳回壳本地 loading 页：
+                    // release 资源域固定为 http://tauri.localhost，dev 为 vite devUrl
+                    #[cfg(debug_assertions)]
+                    let local_entry = "http://localhost:1420/index.html?restart=1";
+                    #[cfg(not(debug_assertions))]
+                    let local_entry = "http://tauri.localhost/index.html?restart=1";
+                    let _ = window.eval(&format!("window.location.href = {local_entry:?}"));
                 }
                 if let Some(manager) = app.try_state::<DshManager>() {
                     manager.restart();
