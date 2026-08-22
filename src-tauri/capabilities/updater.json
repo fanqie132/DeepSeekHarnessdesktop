@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updater",
+  "description": "更新小窗专用：允许触发 do_update、接收事件与自关闭。远程页面（main）不可见此能力",
+  "windows": ["updater"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen",
+    "core:window:allow-close",
+    "allow-do-update"
+  ]
+}

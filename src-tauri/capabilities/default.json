@@ -1,23 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main", "updater"],
+  "description": "主窗口（含加载远程 dsh 页面时）的最小权限：仅图片另存为与事件监听",
+  "windows": ["main"],
   "remote": {
     "urls": ["http://127.0.0.1:3080"]
   },
   "permissions": [
     "core:default",
-    "core:window:default",
-    "core:window:allow-close",
-    "core:window:allow-set-focus",
     "core:event:default",
-    "core:event:allow-emit",
     "core:event:allow-listen",
     "opener:default",
-    "dialog:default",
     "allow-save-image",
-    "allow-save-image-data",
-    "allow-do-update"
+    "allow-save-image-data"
   ]
 }
