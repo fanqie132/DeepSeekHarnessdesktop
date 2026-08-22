@@ -155,6 +155,21 @@ fn resolve_dsh_log(handle: &tauri::AppHandle) -> PathBuf {
     }
 }
 
+/// 局域网转发器开关的持久化文件（B3：默认关闭）。
+fn forwarder_flag_path(handle: &tauri::AppHandle) -> PathBuf {
+    app_data_base(handle).join("forwarder-enabled.txt")
+}
+
+fn forwarder_enabled(handle: &tauri::AppHandle) -> bool {
+    std::fs::read_to_string(forwarder_flag_path(handle))
+        .map(|s| s.trim() == "on")
+        .unwrap_or(false)
+}
+
+fn set_forwarder_enabled(handle: &tauri::AppHandle, on: bool) {
+    let _ = std::fs::write(forwarder_flag_path(handle), if on { "on" } else { "off" });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -214,6 +229,10 @@ pub fn run() {
                 }
                 if let Some(manager) = handle.try_state::<DshManager>() {
                     manager.start();
+                    // 转发器按用户开关状态拉起（默认关闭）
+                    if forwarder_enabled(&handle) {
+                        manager.set_forwarder(true);
+                    }
                 }
             });
 

@@ -79,6 +79,7 @@ struct DshInner {
     entry: PathBuf,
     log: PathBuf,
     cert_dir: PathBuf,
+    forward_port: u16,
     #[cfg(windows)]
     job: Option<KillOnCloseJob>,
 }
@@ -94,21 +95,21 @@ impl DshManager {
                 entry,
                 log,
                 cert_dir,
+                forward_port: 8787,
                 #[cfg(windows)]
                 job: KillOnCloseJob::new(),
             }),
         }
     }
 
+    /// 启动 dsh 本体（转发器由 set_forwarder 单独控制，默认关闭）。
     pub fn start(&self) {
         let mut inner = self.inner.lock().unwrap();
         if inner.child.is_some() {
             return;
         }
         let child = spawn_dsh(&inner);
-        let forwarder = spawn_forwarder(&inner);
         inner.child = Some(child);
-        inner.forwarder = forwarder;
     }
 
     /// 停止当前 dsh 进程树（更新/替换 runtime 前调用，释放文件锁）。
@@ -120,6 +121,35 @@ impl DshManager {
         if let Some(forwarder) = inner.forwarder.take() {
             kill_tree(forwarder);
         }
+    }
+
+    /// 开关局域网转发器（B3）：开启则拉起（含鉴权 token），关闭则终止进程。
+    /// 返回开启成功后的连接信息（地址 + token），关闭返回 None。
+    pub fn set_forwarder(&self, enabled: bool) -> Option<(String, String)> {
+        let mut inner = self.inner.lock().unwrap();
+        if !enabled {
+            if let Some(f) = inner.forwarder.take() {
+                kill_tree(f);
+            }
+            return None;
+        }
+        if inner.forwarder.is_some() {
+            return None; // 已在运行
+        }
+        match spawn_forwarder(&inner) {
+            Some(child) => {
+                inner.forwarder = Some(child);
+                let ip = lan_ipv4()?.to_string();
+                let token = ensure_forwarder_token(&inner.cert_dir)?;
+                Some((format!("https://{ip}:{}", inner.forward_port), token))
+            }
+            None => None,
+        }
+    }
+
+    /// 转发器当前是否在运行。
+    pub fn forwarder_running(&self) -> bool {
+        self.inner.lock().unwrap().forwarder.is_some()
     }
 
     /// 让独立 taskkill 进程后台清理 dsh 进程树，不等待（用于托盘退出，界面立即关闭）。
@@ -142,19 +172,15 @@ impl DshManager {
 
     /// 停止当前 dsh 进程树并重新启动（更新/插件生效后调用）。
     /// 完全结束旧进程（含子进程），等待端口释放后再启动新进程。
+    /// 注意：转发器不在此自动重启，由托盘开关状态决定。
     pub fn restart(&self) {
         let mut inner = self.inner.lock().unwrap();
         if let Some(child) = inner.child.take() {
             kill_tree(child);
             wait_port_free(3080, Duration::from_secs(10));
         }
-        if let Some(forwarder) = inner.forwarder.take() {
-            kill_tree(forwarder);
-        }
         let child = spawn_dsh(&inner);
-        let forwarder = spawn_forwarder(&inner);
         inner.child = Some(child);
-        inner.forwarder = forwarder;
     }
 }
 
@@ -247,15 +273,30 @@ fn lan_ipv4() -> Option<std::net::Ipv4Addr> {
 }
 
 /// 确保局域网转发器证书存在（SAN 含当前局域网 IP），返回 (pfx 路径, 密码)。
-/// 证书不存在或 IP 变化时用 PowerShell 重新生成。
+/// 证书不存在**或本机 IP 已变化**时重新生成（B4：旧实现只查文件存在，换 IP 后手机端报证书错误）。
 pub fn ensure_forwarder_cert(cert_dir: &std::path::Path) -> Option<(PathBuf, String)> {
     use std::fs;
     let pass = "dsh-fwd".to_string();
     let pfx = cert_dir.join("forwarder.pfx");
+    let ip_file = cert_dir.join("forwarder.ip.txt");
     let current_ip = lan_ipv4()?.to_string();
-    // 复用条件：文件存在
+    // 复用条件：文件存在 且 记录的生成 IP 与当前一致
     if pfx.exists() {
-        return Some((pfx, pass));
+        let recorded = fs::read_to_string(&ip_file).unwrap_or_default();
+        if recorded.trim() == current_ip {
+            return Some((pfx, pass));
+        }
+        // IP 变化：删旧 pfx + 清理证书库里的旧自签证书，走重签
+        let _ = fs::remove_file(&pfx);
+        let _ = fs::remove_file(&ip_file);
+        let _ = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-ChildItem Cert:\\CurrentUser\\My | Where-Object { $_.FriendlyName -eq 'Dsh Forwarder' } | Remove-Item -Force",
+            ])
+            .creation_flags(if cfg!(windows) { 0x0800_0000 } else { 0 })
+            .output();
     }
     if fs::create_dir_all(cert_dir).is_err() {
         return None;
@@ -270,9 +311,34 @@ pub fn ensure_forwarder_cert(cert_dir: &std::path::Path) -> Option<(PathBuf, Str
         .creation_flags(if cfg!(windows) { 0x0800_0000 } else { 0 })
         .output();
     match out {
-        Ok(o) if o.status.success() && pfx.exists() => Some((pfx, pass)),
+        Ok(o) if o.status.success() && pfx.exists() => {
+            // 记录生成时的 IP，供下次变化检测
+            let _ = fs::write(&ip_file, &current_ip);
+            Some((pfx, pass))
+        }
         _ => None,
     }
+}
+
+/// 确保转发器访问 token 存在（B1 鉴权）：首次随机生成 32 位 hex 并持久化，
+/// 之后复用。无 token 的设备一律拒绝。
+fn ensure_forwarder_token(cert_dir: &std::path::Path) -> Option<String> {
+    use std::fs;
+    let f = cert_dir.join("forwarder-token.txt");
+    if let Ok(t) = fs::read_to_string(&f) {
+        let t = t.trim().to_string();
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    use rand::Rng;
+    const CHARSET: &[u8] = b"0123456789abcdef";
+    let token: String = (0..32)
+        .map(|_| CHARSET[rand::thread_rng().gen_range(0..CHARSET.len())] as char)
+        .collect();
+    fs::create_dir_all(cert_dir).ok()?;
+    fs::write(&f, &token).ok()?;
+    Some(token)
 }
 
 /// 终止一个进程的整棵进程树（Windows taskkill /T /F）。
@@ -313,11 +379,17 @@ impl Drop for DshManager {
 const FORWARDER_JS: &str = include_str!("../forwarder.cjs");
 
 /// 启动局域网转发器：让同一 WiFi 下的手机通过 https://<局域网IP>:8787 访问 dsh。
+/// B3：证书不可用时拒绝启动（绝不回退 HTTP 明文暴露局域网）；
+/// B1：必须携带访问 token，无 token 的设备一律 403。
 fn spawn_forwarder(inner: &DshInner) -> Option<Child> {
     let path = std::env::temp_dir().join("dsh-forwarder.cjs");
     if std::fs::write(&path, FORWARDER_JS).is_err() {
         return None;
     }
+    // HTTPS 证书是硬性要求（安全上下文 + 不做明文回退）
+    let (pfx, pass) = ensure_forwarder_cert(&inner.cert_dir)?;
+    // 访问 token 是硬性要求
+    let token = ensure_forwarder_token(&inner.cert_dir)?;
     let mut cmd = Command::new(&inner.node);
     cmd.arg(&path);
     // 转发器日志写进 dsh.log，便于排查
@@ -325,11 +397,9 @@ fn spawn_forwarder(inner: &DshInner) -> Option<Child> {
         cmd.stdout(Stdio::from(f.try_clone().expect("log clone")))
             .stderr(Stdio::from(f));
     }
-    // 提供 HTTPS 证书（生成或复用），使手机页面处于安全上下文
-    if let Some((pfx, pass)) = ensure_forwarder_cert(&inner.cert_dir) {
-        cmd.env("FORWARD_PFX", &pfx);
-        cmd.env("FORWARD_PFX_PASS", pass);
-    }
+    cmd.env("FORWARD_PFX", &pfx);
+    cmd.env("FORWARD_PFX_PASS", pass);
+    cmd.env("FORWARD_TOKEN", token);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     #[cfg(windows)]
