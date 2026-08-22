@@ -156,6 +156,17 @@ impl DshManager {
         self.inner.lock().unwrap().forwarder.is_some()
     }
 
+    /// 只读获取当前连接地址（转发器未运行时返回 None，零副作用）。
+    pub fn connect_url(&self) -> Option<String> {
+        let inner = self.inner.lock().unwrap();
+        if inner.forwarder.is_none() {
+            return None;
+        }
+        let ip = lan_ipv4()?.to_string();
+        let token = ensure_forwarder_token(&inner.cert_dir)?;
+        Some(format!("https://{ip}:{}?token={}", inner.forward_port, token))
+    }
+
     /// 让独立 taskkill 进程后台清理 dsh 进程树，不等待（用于托盘退出，界面立即关闭）。
     pub fn stop_detached(&self) {
         let mut inner = self.inner.lock().unwrap();

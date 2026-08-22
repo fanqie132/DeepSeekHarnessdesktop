@@ -14,14 +14,15 @@ async function apply(info: ConnectInfo) {
   errorEl.style.display = "none";
   addrEl.textContent = info.url;
   try {
-    // 成熟库渲染，canvas 输出；纠错等级 M，留白 2 模块
-    await QRCode.toCanvas(qrEl, info.url, {
-      width: 216,
+    // toDataURL 直接产出图片数据，避开 canvas 元素类型坑
+    const dataUrl = await QRCode.toDataURL(info.url, {
+      width: 432, // 2x 输出，页面显示 216px 保持锐利
       margin: 0,
       errorCorrectionLevel: "M",
       color: { dark: "#111827", light: "#ffffff" },
     });
-  } catch (e) {
+    qrEl.innerHTML = `<img src="${dataUrl}" alt="二维码" />`;
+  } catch {
     qrEl.textContent = "二维码生成失败";
   }
   copyBtn.onclick = async () => {

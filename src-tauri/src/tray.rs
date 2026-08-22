@@ -94,7 +94,7 @@ fn apply_lan_switch(app: &tauri::AppHandle, on: bool) -> bool {
     }
 }
 
-/// 幂等地确保转发器运行并返回完整连接地址（set_forwarder 对已运行场景幂等）。
+/// 幂等地确保转发器运行并返回完整连接地址（仅"lan"开关路径使用）。
 fn open_and_get_connect_url(app: &tauri::AppHandle) -> Result<String, String> {
     match app.try_state::<DshManager>() {
         Some(manager) => match manager.set_forwarder(true) {
@@ -157,15 +157,20 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
                 }
             }
             "qr" => {
-                // 随时唤出：未开启则先自动开启（幂等）
-                match open_and_get_connect_url(app) {
-                    Ok(url) => {
+                // 纯展示：仅在转发器已运行时可用（零副作用），未开启则提示
+                let r = app.try_state::<DshManager>().and_then(|m| m.connect_url());
+                match r {
+                    Some(url) => {
                         if let Err(e) = open_connect_window(app, &url) {
                             let _ = app.dialog().message(format!("打开失败：{e}")).title("手机连接").show(|_| {});
                         }
                     }
-                    Err(e) => {
-                        let _ = app.dialog().message(e).title("手机连接").show(|_| {});
+                    None => {
+                        let _ = app
+                            .dialog()
+                            .message("请先勾选「局域网访问（手机）」以开启转发器。")
+                            .title("手机连接")
+                            .show(|_| {});
                     }
                 }
             }
