@@ -1,7 +1,7 @@
+import QRCode from "qrcode";
 import { listen } from "@tauri-apps/api/event";
 
 interface ConnectInfo {
-  qrSvg: string; // Rust 生成的二维码 SVG
   url: string; // https://<ip>:8787/?token=xxx
 }
 
@@ -10,16 +10,20 @@ const addrEl = document.getElementById("addr") as HTMLElement;
 const copyBtn = document.getElementById("btn-copy") as HTMLButtonElement;
 const errorEl = document.getElementById("error") as HTMLElement;
 
-function apply(info: ConnectInfo) {
-  qrEl.innerHTML = info.qrSvg;
-  const svg = qrEl.querySelector("svg");
-  if (svg) {
-    svg.removeAttribute("width");
-    svg.removeAttribute("height");
-    svg.style.width = "100%";
-    svg.style.height = "100%";
-  }
+async function apply(info: ConnectInfo) {
+  errorEl.style.display = "none";
   addrEl.textContent = info.url;
+  try {
+    // 成熟库渲染，canvas 输出；纠错等级 M，留白 2 模块
+    await QRCode.toCanvas(qrEl, info.url, {
+      width: 216,
+      margin: 0,
+      errorCorrectionLevel: "M",
+      color: { dark: "#111827", light: "#ffffff" },
+    });
+  } catch (e) {
+    qrEl.textContent = "二维码生成失败";
+  }
   copyBtn.onclick = async () => {
     try {
       await navigator.clipboard.writeText(info.url);
@@ -36,8 +40,7 @@ function apply(info: ConnectInfo) {
 }
 
 void listen<ConnectInfo>("connect-info", (e) => {
-  errorEl.style.display = "none";
-  apply(e.payload);
+  void apply(e.payload);
 });
 
 void listen<string>("connect-error", (e) => {

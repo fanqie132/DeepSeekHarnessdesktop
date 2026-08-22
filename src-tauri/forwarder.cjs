@@ -1,11 +1,13 @@
-// DeepSeek Harness 局域网转发器（带鉴权版）
+// DeepSeek Harness 局域网转发器（鉴权 + Cookie 会话版）
 // 监听局域网 8787 端口，转发到 127.0.0.1:3080，并把 Host 与 Origin 重写为
-// 127.0.0.1:3080，以通过 dsh 的 /api browser-trust fence。支持 HTTP/HTTPS 与 WebSocket。
+// 127.0.0.1:3080，以通过 dsh 的 /api browser-trust fence。支持 HTTPS 与 WebSocket。
 //
 // 安全要求（缺一即退出，绝不裸奔）：
 //  1. FORWARD_PFX / FORWARD_PFX_PASS 必须提供 HTTPS 证书——不做 HTTP 明文回退
-//  2. FORWARD_TOKEN 访问令牌必须设置；请求须携带 ?token= 或 x-dsh-token 头，
-//     否则一律 403（token 校验通过后会在转发前从 URL 中剥离，不泄漏给 dsh）
+//  2. FORWARD_TOKEN 访问令牌必须设置。校验顺序：Cookie → ?token= → x-dsh-token 头
+//     - 首次通过 query/header 校验后自动下发会话 Cookie，
+//       之后页面所有子资源请求与 WebSocket 由浏览器自动携带，不再逐个带 token
+//     - 全部未通过 → 403；token 校验通过后从转发 URL 中剥离，不泄漏给 dsh
 const http = require("node:http");
 const https = require("node:https");
 const net = require("node:net");
@@ -14,6 +16,7 @@ const fs = require("node:fs");
 const TARGET_HOST = "127.0.0.1";
 const TARGET_PORT = Number(process.env.DSH_PORT || 3080);
 const LISTEN_PORT = Number(process.env.FORWARD_PORT || 8787);
+const COOKIE_NAME = "dsh_fwd";
 
 const pfxPath = process.env.FORWARD_PFX;
 const pfxPass = process.env.FORWARD_PFX_PASS || "";
@@ -40,11 +43,30 @@ function stripToken(url) {
   return q ? `${base}?${q}` : base;
 }
 
-/** 校验请求是否携带正确 token（query 参数或 header）。 */
-function authorized(req) {
-  const u = new URL(req.url, "http://localhost");
-  if (u.searchParams.get("token") === TOKEN) return true;
-  return req.headers["x-dsh-token"] === TOKEN;
+/** 从 Cookie 头里取指定名字的值。 */
+function getCookie(req, name) {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const pair of raw.split(";")) {
+    const eq = pair.indexOf("=");
+    if (eq === -1) continue;
+    if (pair.slice(0, eq).trim() === name) return pair.slice(eq + 1).trim();
+  }
+  return null;
+}
+
+/**
+ * 校验请求凭据。返回 "cookie"（已带会话）或 "query"/"header"（凭 URL/头通过，
+ * 需要下发 Cookie）或 null（拒绝）。
+ */
+function authKind(req) {
+  if (getCookie(req, COOKIE_NAME) === TOKEN) return "cookie";
+  try {
+    const u = new URL(req.url, "http://localhost");
+    if (u.searchParams.get("token") === TOKEN) return "query";
+  } catch {}
+  if (req.headers["x-dsh-token"] === TOKEN) return "header";
+  return null;
 }
 
 function deny(res) {
@@ -60,7 +82,15 @@ function rewriteHeaders(headers) {
 }
 
 function onRequest(req, res) {
-  if (!authorized(req)) return deny(res);
+  const kind = authKind(req);
+  if (!kind) return deny(res);
+  // 凭 query/header 首次通过时下发会话 Cookie（30 天，同站）
+  if (kind !== "cookie") {
+    res.setHeader(
+      "Set-Cookie",
+      `${COOKIE_NAME}=${TOKEN}; Path=/; Max-Age=2592000; SameSite=Lax`
+    );
+  }
   const proxyReq = http.request(
     {
       host: TARGET_HOST,
@@ -83,7 +113,7 @@ function onRequest(req, res) {
 }
 
 function onUpgrade(req, socket, head) {
-  if (!authorized(req)) {
+  if (!authKind(req)) {
     socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
     socket.destroy();
     return;
@@ -115,5 +145,5 @@ const server = https.createServer({
 server.on("request", onRequest);
 server.on("upgrade", onUpgrade);
 server.listen(LISTEN_PORT, "0.0.0.0", () => {
-  console.log(`[forwarder] HTTPS(鉴权) on 0.0.0.0:${LISTEN_PORT} -> ${TARGET_HOST}:${TARGET_PORT}`);
+  console.log(`[forwarder] HTTPS(鉴权+Cookie会话) on 0.0.0.0:${LISTEN_PORT} -> ${TARGET_HOST}:${TARGET_PORT}`);
 });
