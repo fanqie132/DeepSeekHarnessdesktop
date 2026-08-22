@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "dsh-desktop"
 version = "0.2.0"
 description = "DeepSeek Harness 桌面客户端（非官方）"
