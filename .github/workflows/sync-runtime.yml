@@ -5,6 +5,7 @@ on:
     - cron: "0 */6 * * *" # 每 6 小时检查（UTC 0/6/12/18 = CST 8/14/20/02）
   workflow_dispatch:
 
+# P1-S13：本工作流必须写 release（contents: write）——已是最小化，不再收敛
 permissions:
   contents: write
 
@@ -12,15 +13,15 @@ jobs:
   sync:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10
 
       # 不配置 cache: pnpm —— skip 更新时 pnpm store 不存在，
       # setup-node 的 post 阶段会报 Path Validation Error 把整个 job 标红（假警报）
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
 
@@ -29,6 +30,8 @@ jobs:
         shell: pwsh
         run: |
           $latest = (Invoke-RestMethod -Uri "https://registry.npmjs.org/@deepseek-ai/dsh" -UseBasicParsing)."dist-tags".latest
+          # P1-S13 余项：版本号来自第三方 npm registry，先过 semver 白名单再使用（fail-closed）
+          if ($latest -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.][-0-9A-Za-z.]*)?$') { Write-Host "::error::latest 版本号未过 semver 白名单: $latest"; exit 1 }
           $local = (Get-Content runtime/package.json | ConvertFrom-Json).dependencies."@deepseek-ai/dsh"
           Write-Host "latest=$latest local=$local"
           "latest=$latest" >> $env:GITHUB_OUTPUT
@@ -38,21 +41,29 @@ jobs:
       - name: update runtime
         if: steps.check.outputs.need_update == 'true'
         shell: pwsh
+        env:
+          LATEST: ${{ steps.check.outputs.latest }}
         run: |
-          pnpm --dir runtime up "@deepseek-ai/dsh@${{ steps.check.outputs.latest }}" --registry https://registry.npmjs.org
+          pnpm --dir runtime up "@deepseek-ai/dsh@$env:LATEST" --registry https://registry.npmjs.org
           pnpm --dir runtime install --registry https://registry.npmjs.org
 
       - name: build runtime.zip
         if: steps.check.outputs.need_update == 'true'
         shell: pwsh
+        env:
+          LATEST: ${{ steps.check.outputs.latest }}
         run: |
           # 版本元数据：客户端每次启动只拉这个几字节文件做更新检测，不下载大包
-          Set-Content -Path runtime-version.txt -Value "${{ steps.check.outputs.latest }}" -Encoding ascii -NoNewline
+          Set-Content -Path runtime-version.txt -Value "$env:LATEST" -Encoding ascii -NoNewline
           # tar 打包：快且无 260 字符路径限制（Compress-Archive 对深层 node_modules 会失败）
           # CI 的 cwd 即仓库根，runtime 就在当前目录（README 里的 -C .. 写法仅适用于本地）
           if (Test-Path runtime.zip) { Remove-Item runtime.zip -Force }
           tar -a -cf runtime.zip runtime
           Write-Host "runtime.zip size $((Get-Item runtime.zip).Length)"
+          # P0-S3：生成 SHA-256 校验文件（客户端下载后强制校验）
+          $hash = (Get-FileHash runtime.zip -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path runtime.zip.sha256 -Value $hash -Encoding ascii -NoNewline
+          Write-Host "runtime.zip.sha256 = $hash"
 
       - name: upload to runtime release
         if: steps.check.outputs.need_update == 'true'
@@ -62,15 +73,17 @@ jobs:
         run: |
           $tag = "runtime"
           gh release view $tag 2>$null; if ($LASTEXITCODE -ne 0) { gh release create $tag --title "runtime" --notes "auto-synced runtime" }
-          gh release upload $tag runtime.zip runtime-version.txt --clobber
+          gh release upload $tag runtime.zip runtime.zip.sha256 runtime-version.txt --clobber
 
       - name: verify release assets
         if: steps.check.outputs.need_update == 'true'
         shell: pwsh
+        env:
+          LATEST: ${{ steps.check.outputs.latest }}
         run: |
           # 回读校验：重新下载刚上传的资产，确认 zip 内版本 == npm latest，杜绝静默失败
           Start-Sleep -Seconds 5
-          $latest = "${{ steps.check.outputs.latest }}"
+          $latest = "$env:LATEST"
           curl.exe -s -L --fail -o verify.zip "https://github.com/${{ github.repository }}/releases/download/runtime/runtime.zip"
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::回读下载 runtime.zip 失败"; exit 1 }
           New-Item -ItemType Directory -Path verify-tmp -Force | Out-Null
@@ -81,18 +94,22 @@ jobs:
           if ($ver -ne $latest) { Write-Host "::error::资产版本校验失败"; exit 1 }
           $meta = curl.exe -s -L --fail "https://github.com/${{ github.repository }}/releases/download/runtime/runtime-version.txt"
           if ($LASTEXITCODE -ne 0 -or "$meta".Trim() -ne $latest) { Write-Host "::error::version.txt 校验失败: $meta"; exit 1 }
-          Write-Host "::notice::资产校验通过 version=$ver"
+          $sha = curl.exe -s -L --fail "https://github.com/${{ github.repository }}/releases/download/runtime/runtime.zip.sha256"
+          $shaLocal = (Get-FileHash verify.zip -Algorithm SHA256).Hash.ToLower()
+          if ($LASTEXITCODE -ne 0 -or "$sha".Trim() -ne $shaLocal) { Write-Host "::error::sha256 校验失败: $sha vs $shaLocal"; exit 1 }
+          Write-Host "::notice::资产校验通过 version=$ver sha256=$shaLocal"
 
       - name: commit synced files
         if: steps.check.outputs.need_update == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.check.outputs.latest }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add runtime/package.json runtime/pnpm-lock.yaml
           git diff --staged --quiet; if ($LASTEXITCODE -ne 0) {
-            git commit -m "chore(runtime): sync dsh to ${{ steps.check.outputs.latest }} [auto]"
+            git commit -m "chore(runtime): sync dsh to $env:LATEST [auto]"
             git push
           }
