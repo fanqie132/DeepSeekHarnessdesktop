@@ -29,7 +29,8 @@ jobs:
         id: check
         shell: pwsh
         run: |
-          $latest = (Invoke-RestMethod -Uri "https://registry.npmjs.org/@deepseek-ai/dsh" -UseBasicParsing)."dist-tags".latest
+          $meta = Invoke-RestMethod -Uri "https://registry.npmjs.org/@deepseek-ai/dsh" -UseBasicParsing
+          $latest = if ($meta."dist-tags".alpha) { $meta."dist-tags".alpha } else { $meta."dist-tags".latest }
           # P1-S13 余项：版本号来自第三方 npm registry，先过 semver 白名单再使用（fail-closed）
           if ($latest -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.][-0-9A-Za-z.]*)?$') { Write-Host "::error::latest 版本号未过 semver 白名单: $latest"; exit 1 }
           $local = (Get-Content runtime/package.json | ConvertFrom-Json).dependencies."@deepseek-ai/dsh"
