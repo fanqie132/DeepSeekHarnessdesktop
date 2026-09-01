@@ -2,11 +2,9 @@ name: sync-runtime
 
 on:
   schedule:
-    - cron: "0 */6 * * *" # 每 6 小时检查（UTC 0/6/12/18 = CST 8/14/20/02）
-  workflow_dispatch:
+    - cron: "0 */6 * * *" # 姣?6 灏忔椂妫€鏌ワ紙UTC 0/6/12/18 = CST 8/14/20/02锛?  workflow_dispatch:
 
-# P1-S13：本工作流必须写 release（contents: write）——已是最小化，不再收敛
-permissions:
+# P1-S13锛氭湰宸ヤ綔娴佸繀椤诲啓 release锛坈ontents: write锛夆€斺€斿凡鏄渶灏忓寲锛屼笉鍐嶆敹鏁?permissions:
   contents: write
 
 jobs:
@@ -19,9 +17,8 @@ jobs:
         with:
           version: 10
 
-      # 不配置 cache: pnpm —— skip 更新时 pnpm store 不存在，
-      # setup-node 的 post 阶段会报 Path Validation Error 把整个 job 标红（假警报）
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      # 涓嶉厤缃?cache: pnpm 鈥斺€?skip 鏇存柊鏃?pnpm store 涓嶅瓨鍦紝
+      # setup-node 鐨?post 闃舵浼氭姤 Path Validation Error 鎶婃暣涓?job 鏍囩孩锛堝亣璀︽姤锛?      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
 
@@ -30,14 +27,35 @@ jobs:
         shell: pwsh
         run: |
           $meta = Invoke-RestMethod -Uri "https://registry.npmjs.org/@deepseek-ai/dsh" -UseBasicParsing
-          $latest = if ($meta."dist-tags".alpha) { $meta."dist-tags".alpha } else { $meta."dist-tags".latest }
-          # P1-S13 余项：版本号来自第三方 npm registry，先过 semver 白名单再使用（fail-closed）
-          if ($latest -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.][-0-9A-Za-z.]*)?$') { Write-Host "::error::latest 版本号未过 semver 白名单: $latest"; exit 1 }
+          # 鐩爣鐗堟湰 = alpha 涓?latest 涓涔夌増鏈洿楂樿€咃紙涓庡鎴风 fetch_npm_newest 涓€鑷达級銆?          # 鏃у疄鐜?鏈?alpha 灏辩敤 alpha"缂洪櫡锛氬畼鏂瑰彂 stable > alpha 鏃堕暅鍍忔案涓嶈窡闅?stable銆?          $latestT = [string]$meta."dist-tags".latest
+          $alphaT  = [string]$meta."dist-tags".alpha
+          $pick = {
+            param($a, $b)
+            $norm = {
+              param($s)
+              $base = ($s.Trim().TrimStart('v') -split '[-+]')[0]
+              try { [version]$base } catch { $null }
+            }
+            $va = & $norm $a; $vb = & $norm $b
+            if ($null -eq $va) { return $b }
+            if ($null -eq $vb) { return $a }
+            if ($va -gt $vb) { $a } else { $b }
+          }
+          $latest = & $pick $alphaT $latestT
+          # P1-S13 浣欓」锛氱増鏈彿鏉ヨ嚜绗笁鏂?npm registry锛屽厛杩?semver 鐧藉悕鍗曞啀浣跨敤锛坒ail-closed锛?          if ($latest -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.][-0-9A-Za-z.]*)?$') { Write-Host "::error::鐩爣鐗堟湰鍙锋湭杩?semver 鐧藉悕鍗? $latest"; exit 1 }
           $local = (Get-Content runtime/package.json | ConvertFrom-Json).dependencies."@deepseek-ai/dsh"
-          Write-Host "latest=$latest local=$local"
+          Write-Host "alpha=$alphaT latest=$latestT target=$latest local=$local"
           "latest=$latest" >> $env:GITHUB_OUTPUT
           "local=$local" >> $env:GITHUB_OUTPUT
-          if ($latest -ne $local) { "need_update=true" >> $env:GITHUB_OUTPUT } else { "need_update=false" >> $env:GITHUB_OUTPUT }
+          # 璇箟姣旇緝锛堝蹇?v 鍓嶇紑/棰勫彂甯冨熬缂€锛夛紝鏉滅粷瀛楃涓?-ne 璇垽
+          $localBase = (($local.Trim().TrimStart('v')) -split '[-+]')[0]
+          $targetBase = (($latest.Trim().TrimStart('v')) -split '[-+]')[0]
+          try {
+            $lv = [version]$localBase; $tv = [version]$targetBase
+            if ($tv -gt $lv) { "need_update=true" >> $env:GITHUB_OUTPUT } else { "need_update=false" >> $env:GITHUB_OUTPUT }
+          } catch {
+            Write-Host "::error::鐗堟湰鍙锋棤娉曡В鏋?local=$local target=$latest"; exit 1
+          }
 
       - name: update runtime
         if: steps.check.outputs.need_update == 'true'
@@ -73,14 +91,13 @@ jobs:
         env:
           LATEST: ${{ steps.check.outputs.latest }}
         run: |
-          # 版本元数据：客户端每次启动只拉这个几字节文件做更新检测，不下载大包
-          Set-Content -Path runtime-version.txt -Value "$env:LATEST" -Encoding ascii -NoNewline
-          # tar 打包：快且无 260 字符路径限制（Compress-Archive 对深层 node_modules 会失败）
-          # CI 的 cwd 即仓库根，runtime 就在当前目录（README 里的 -C .. 写法仅适用于本地）
+          # 鐗堟湰鍏冩暟鎹細瀹㈡埛绔瘡娆″惎鍔ㄥ彧鎷夎繖涓嚑瀛楄妭鏂囦欢鍋氭洿鏂版娴嬶紝涓嶄笅杞藉ぇ鍖?          Set-Content -Path runtime-version.txt -Value "$env:LATEST" -Encoding ascii -NoNewline
+          # tar 鎵撳寘锛氬揩涓旀棤 260 瀛楃璺緞闄愬埗锛圕ompress-Archive 瀵规繁灞?node_modules 浼氬け璐ワ級
+          # CI 鐨?cwd 鍗充粨搴撴牴锛宺untime 灏卞湪褰撳墠鐩綍锛圧EADME 閲岀殑 -C .. 鍐欐硶浠呴€傜敤浜庢湰鍦帮級
           if (Test-Path runtime.zip) { Remove-Item runtime.zip -Force }
           tar -a -cf runtime.zip runtime
           Write-Host "runtime.zip size $((Get-Item runtime.zip).Length)"
-          # P0-S3：生成 SHA-256 校验文件（客户端下载后强制校验）
+          # P0-S3锛氱敓鎴?SHA-256 鏍￠獙鏂囦欢锛堝鎴风涓嬭浇鍚庡己鍒舵牎楠岋級
           $hash = (Get-FileHash runtime.zip -Algorithm SHA256).Hash.ToLower()
           Set-Content -Path runtime.zip.sha256 -Value $hash -Encoding ascii -NoNewline
           Write-Host "runtime.zip.sha256 = $hash"
@@ -101,23 +118,22 @@ jobs:
         env:
           LATEST: ${{ steps.check.outputs.latest }}
         run: |
-          # 回读校验：重新下载刚上传的资产，确认 zip 内版本 == npm latest，杜绝静默失败
-          Start-Sleep -Seconds 5
+          # 鍥炶鏍￠獙锛氶噸鏂颁笅杞藉垰涓婁紶鐨勮祫浜э紝纭 zip 鍐呯増鏈?== npm 鐩爣鐗堟湰锛屾潨缁濋潤榛樺け璐?          Start-Sleep -Seconds 5
           $latest = "$env:LATEST"
           curl.exe -s -L --fail -o verify.zip "https://github.com/${{ github.repository }}/releases/download/runtime/runtime.zip"
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::回读下载 runtime.zip 失败"; exit 1 }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::鍥炶涓嬭浇 runtime.zip 澶辫触"; exit 1 }
           New-Item -ItemType Directory -Path verify-tmp -Force | Out-Null
           tar -xf verify.zip -C verify-tmp "runtime/node_modules/@deepseek-ai/dsh/package.json"
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::解压校验文件失败"; exit 1 }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::瑙ｅ帇鏍￠獙鏂囦欢澶辫触"; exit 1 }
           $ver = (Get-Content verify-tmp/runtime/node_modules/@deepseek-ai/dsh/package.json -Raw | ConvertFrom-Json).version
-          Write-Host "zip 内版本=$ver 期望=$latest"
-          if ($ver -ne $latest) { Write-Host "::error::资产版本校验失败"; exit 1 }
+          Write-Host "zip 鍐呯増鏈?$ver 鏈熸湜=$latest"
+          if ($ver -ne $latest) { Write-Host "::error::璧勪骇鐗堟湰鏍￠獙澶辫触"; exit 1 }
           $meta = curl.exe -s -L --fail "https://github.com/${{ github.repository }}/releases/download/runtime/runtime-version.txt"
-          if ($LASTEXITCODE -ne 0 -or "$meta".Trim() -ne $latest) { Write-Host "::error::version.txt 校验失败: $meta"; exit 1 }
+          if ($LASTEXITCODE -ne 0 -or "$meta".Trim() -ne $latest) { Write-Host "::error::version.txt 鏍￠獙澶辫触: $meta"; exit 1 }
           $sha = curl.exe -s -L --fail "https://github.com/${{ github.repository }}/releases/download/runtime/runtime.zip.sha256"
           $shaLocal = (Get-FileHash verify.zip -Algorithm SHA256).Hash.ToLower()
-          if ($LASTEXITCODE -ne 0 -or "$sha".Trim() -ne $shaLocal) { Write-Host "::error::sha256 校验失败: $sha vs $shaLocal"; exit 1 }
-          Write-Host "::notice::资产校验通过 version=$ver sha256=$shaLocal"
+          if ($LASTEXITCODE -ne 0 -or "$sha".Trim() -ne $shaLocal) { Write-Host "::error::sha256 鏍￠獙澶辫触: $sha vs $shaLocal"; exit 1 }
+          Write-Host "::notice::璧勪骇鏍￠獙閫氳繃 version=$ver sha256=$shaLocal"
 
       - name: commit synced files
         if: steps.check.outputs.need_update == 'true'
