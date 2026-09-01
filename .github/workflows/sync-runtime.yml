@@ -48,6 +48,25 @@ jobs:
           pnpm --dir runtime up "@deepseek-ai/dsh@$env:LATEST" --registry https://registry.npmjs.org
           pnpm --dir runtime install --registry https://registry.npmjs.org
 
+      - name: patch browser-auth SameSite for desktop iframe
+        if: steps.check.outputs.need_update == 'true'
+        shell: pwsh
+        run: |
+          # desktop-shell fix: dsh web browser-auth cookie uses SameSite=Strict,
+          # which breaks cross-origin iframe embedding (tauri://localhost shell page
+          # embeds http://127.0.0.1). Rewrite to SameSite=None; Secure so the auth
+          # cookie rides iframe requests (loopback is a trustworthy origin, Secure
+          # is honored over http).
+          $f = 'runtime/node_modules/@deepseek-ai/dsh-client-connection/lib/index.js'
+          if (Test-Path $f) {
+            $c = Get-Content $f -Raw
+            $c = $c.Replace('SameSite=Strict', 'SameSite=None; Secure')
+            Set-Content -Path $f -Value $c -NoNewline -Encoding UTF8
+            Write-Host "patched SameSite -> None; Secure"
+          } else {
+            Write-Host "::warning::dsh-client-connection not found, patch skipped"
+          }
+
       - name: build runtime.zip
         if: steps.check.outputs.need_update == 'true'
         shell: pwsh
